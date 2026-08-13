@@ -1,0 +1,69 @@
+{
+  "name": "dsh-llm-codex-exec",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness LLM provider backed by the locally authenticated Codex CLI",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/**/*.d.ts",
+    "schemas",
+    "docs",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown && tsc --project tsconfig.build.json --emitDeclarationOnly",
+    "check": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm pack --pack-destination dist",
+    "clean": "rimraf lib dist coverage",
+    "prepare": "pnpm run build",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "keywords": [
+    "deepseek-harness",
+    "codex",
+    "llm",
+    "plugin"
+  ],
+  "license": "MIT",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-subprocess": "^0.1.0-rc.5"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@openai/codex": "0.147.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-subprocess": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-subprocess-local": "^0.1.0-rc.5",
+    "@types/node": "^24.10.0",
+    "rimraf": "^6.1.0",
+    "tsdown": "0.22.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
