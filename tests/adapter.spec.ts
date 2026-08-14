@@ -45,7 +45,10 @@ function adapter(events: readonly CodexAppServerEvent[]) {
       for (const event of events) yield event
     })()
   })
-  const runner: CodexAppServerRunnerPort = { stream }
+  const runner: CodexAppServerRunnerPort = {
+    open: vi.fn(async () => { throw new Error('stateful runner was not expected') }),
+    stream,
+  }
   return {
     stream,
     adapter: new CodexAppServerAdapter({

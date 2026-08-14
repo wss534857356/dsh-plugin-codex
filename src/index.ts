@@ -29,6 +29,10 @@ export type {
   CodexAppServerRequest,
   CodexAppServerRunnerOptions,
   CodexAppServerRunnerPort,
+  CodexAppServerThreadPort,
+  CodexAppServerThreadRequest,
+  CodexAppServerToolResult,
+  CodexAppServerTurnRequest,
   JsonValue,
 } from './runner.ts'
 

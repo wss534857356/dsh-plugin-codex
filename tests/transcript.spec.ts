@@ -52,6 +52,10 @@ function completedTurn(): CodexAppServerEvent {
 class TranscriptRunner implements CodexAppServerRunnerPort {
   readonly requests: CodexAppServerRequest[] = []
 
+  async open(): Promise<never> {
+    throw new Error('stateful runner was not expected')
+  }
+
   async * stream(request: CodexAppServerRequest): AsyncIterable<CodexAppServerEvent> {
     this.requests.push(request)
     if (this.requests.length === 1) {

@@ -16,6 +16,8 @@ import type {
   CodexAppServerEvent,
   CodexAppServerRequest,
   CodexAppServerRunnerOptions,
+  CodexAppServerThreadPort,
+  CodexAppServerTurnRequest,
 } from '../src/runner.ts'
 
 interface JsonObject {
@@ -139,6 +141,15 @@ async function collect(instance: CodexAppServerRunner, input: CodexAppServerRequ
   return events
 }
 
+async function collectTurn(
+  thread: CodexAppServerThreadPort,
+  input: CodexAppServerTurnRequest,
+): Promise<CodexAppServerEvent[]> {
+  const events: CodexAppServerEvent[] = []
+  for await (const event of thread.stream(input)) events.push(event)
+  return events
+}
+
 describe('Codex App Server runner', () => {
   it('uses the pinned CLI entry and fixed non-shell policy', () => {
     expect(existsSync(codexCliEntry())).toBe(true)
@@ -240,6 +251,132 @@ describe('Codex App Server runner', () => {
     expect(setup.child.terminate).toHaveBeenCalledOnce()
   })
 
+  it('keeps one ephemeral process alive across serialized turns', async () => {
+    const messages: JsonObject[] = []
+    let nextTurn = 0
+    const setup = runner((message, send, sendRaw) => {
+      messages.push(message)
+      if (message.method === 'turn/start') {
+        nextTurn += 1
+        const id = `turn-${String(nextTurn)}`
+        send({ id: message.id, result: { turn: { id } } })
+        send({ method: 'turn/completed', params: {
+          threadId: 'thread-1',
+          turn: { id, status: 'completed', error: null },
+        } })
+      } else {
+        standardScript(() => {})(message, send, sendRaw)
+      }
+    })
+
+    const thread = await setup.runner.open(request())
+    const first = await collectTurn(thread, {
+      injectedItems: request().history,
+      input: [],
+    })
+    expect(first[0]).toMatchObject({ kind: 'thread-started', threadId: 'thread-1' })
+    expect(setup.child.terminate).not.toHaveBeenCalled()
+    expect(existsSync(setup.spec().cwd)).toBe(true)
+
+    const second = await collectTurn(thread, {
+      input: [{ type: 'text', text: 'follow up', text_elements: [] }],
+    })
+    expect(second.some(event => event.kind === 'thread-started')).toBe(false)
+    expect(messages.filter(message => message.method === 'thread/start')).toHaveLength(1)
+    expect(messages.filter(message => message.method === 'turn/start')).toHaveLength(2)
+    expect(messages.filter(message => message.method === 'turn/start')[1]).toMatchObject({
+      params: { input: [{ type: 'text', text: 'follow up', text_elements: [] }] },
+    })
+
+    await thread.dispose()
+    expect(existsSync(setup.spec().cwd)).toBe(false)
+    expect(setup.child.terminate).toHaveBeenCalledOnce()
+    expect(setup.child.waitForExit).toHaveBeenCalledOnce()
+  })
+
+  it('holds a dynamic-tool callback across Harness steps and resumes the same turn', async () => {
+    const messages: JsonObject[] = []
+    const setup = runner((message, send, sendRaw) => {
+      messages.push(message)
+      standardScript((write) => {
+        write({
+          id: 'server-call-1',
+          method: 'item/tool/call',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            callId: 'call-1',
+            namespace: null,
+            tool: 'read_file',
+            arguments: { path: 'a.txt' },
+          },
+        })
+      })(message, send, sendRaw)
+      if (message.id === 'server-call-1') {
+        expect(message.result).toEqual({
+          contentItems: [{ type: 'inputText', text: 'file text' }],
+          success: true,
+        })
+        send({ method: 'turn/completed', params: {
+          threadId: 'thread-1',
+          turn: { id: 'turn-1', status: 'completed', error: null },
+        } })
+      }
+    })
+
+    const thread = await setup.runner.open(request())
+    const first = await collectTurn(thread, { injectedItems: request().history })
+    expect(first).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'server-request', id: 'server-call-1' }),
+    ]))
+    expect(setup.child.terminate).not.toHaveBeenCalled()
+
+    await expect(collectTurn(thread, {
+      toolResult: { callId: 'call-1', output: 'file text', success: true },
+    })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
+    ]))
+    expect(messages.filter(message => message.method === 'turn/start')).toHaveLength(1)
+    await thread.dispose()
+  })
+
+  it('disposes a thread after a mismatched dynamic-tool result', async () => {
+    const setup = runner(standardScript((send) => {
+      send({
+        id: 'server-call-1',
+        method: 'item/tool/call',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          callId: 'call-1',
+          namespace: null,
+          tool: 'read_file',
+          arguments: { path: 'a.txt' },
+        },
+      })
+    }))
+    const thread = await setup.runner.open(request())
+    await collectTurn(thread, {})
+
+    await expect(collectTurn(thread, {
+      toolResult: { callId: 'wrong-call', output: 'file text', success: true },
+    })).rejects.toMatchObject({ code: 'INVALID_CONTINUATION' })
+    expect(setup.child.terminate).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a concurrent continuation while its owner still consumes the thread', async () => {
+    const setup = runner(standardScript(() => {}))
+    const thread = await setup.runner.open(request())
+    const first = thread.stream({})[Symbol.asyncIterator]()
+    await expect(first.next()).resolves.toMatchObject({
+      done: false,
+      value: { kind: 'thread-started', threadId: 'thread-1' },
+    })
+    await expect(collectTurn(thread, {})).rejects.toMatchObject({ code: 'INVALID_CONTINUATION' })
+    await first.return?.()
+    expect(setup.child.terminate).toHaveBeenCalledOnce()
+  })
+
   it('reports and declines a Codex-native approval without failing the turn', async () => {
     const setup = runner((message, send, sendRaw) => {
       standardScript((write) => {
@@ -270,6 +407,10 @@ describe('Codex App Server runner', () => {
   })
 
   it('classifies deadline and caller cancellation separately', async () => {
+    const opening = runner(() => {}, { timeoutMs: 5 })
+    await expect(opening.runner.open(request())).rejects.toMatchObject({ code: 'TIMEOUT' })
+    expect(opening.child.terminate).toHaveBeenCalledOnce()
+
     const hanging = (): Script => standardScript(() => {})
     const timed = runner(hanging(), { timeoutMs: 5 })
     await expect(collect(timed.runner, request())).rejects.toMatchObject({ code: 'TIMEOUT' })
