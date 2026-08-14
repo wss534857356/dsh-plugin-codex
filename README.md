@@ -99,12 +99,12 @@ Example override:
 - `temperature`, `maxTokens`, and `stop` are rejected because this App Server path does not expose reliable equivalents. Auxiliary calls that require `maxTokens`, including LLM-backed session titles and basic compaction, cannot use this provider.
 - `CODEX_INTERNAL_ORIGINATOR_OVERRIDE=deepseek-harness` identifies adapter requests; this internal compatibility point is reverified on Codex upgrades.
 - Each model step uses a fresh ephemeral thread. Durable Harness messages and adapter replay state reconstruct model-visible history; no Codex thread is resumed.
-- Replay state version `1` contains only provider outputs in `items`; observed Codex-owned context is retained separately in `contextItems` for audit and never reinjected. Older replay versions fall back to Harness message reconstruction.
+- Replay state version `1` contains only provider outputs in `items`; observed Codex-owned context is retained separately in `contextItems` for audit and never reinjected. Reconstruction coalesces cumulative snapshots by stable provider item or call identity, so sessions written by older plugin versions do not multiply the same opaque outputs on later requests. Older replay versions fall back to Harness message reconstruction.
 - Authentication and subscription availability belong to the native Codex installation. Login failures surface as Harness `AUTH` failures; the plugin provides no credential UI.
 
 ## Development
 
-The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound request. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts the implemented ownership split. [ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) records how raw actions, provider context, replay, and Harness tool calls remain distinct. [ADR 0004](docs/adr/0004-render-codex-trajectory-in-the-browser-plugin.md) records the client renderer shadow used by the out-of-tree bundle.
+The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound request. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts the implemented ownership split. [ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) records how raw actions, provider context, replay, and Harness tool calls remain distinct. [ADR 0004](docs/adr/0004-render-codex-trajectory-in-the-browser-plugin.md) records the client renderer shadow used by the out-of-tree bundle. [ADR 0005](docs/adr/0005-coalesce-stateless-codex-replay.md) bounds stateless replay reconstruction by provider identity.
 
 ```sh
 pnpm run typecheck
