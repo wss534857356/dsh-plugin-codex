@@ -6,7 +6,9 @@ import { describe, expect, it, vi } from 'vitest'
 import type { CodexActionBlock } from '../src/protocol.ts'
 import {
   actionSummary,
-  CodexActionCard,
+  codexActionView,
+  CodexActionDetails,
+  CodexActionRow,
   CodexAssistantBody,
   isCodexActionBlock,
 } from '../src/client/CodexAssistantNodeView.tsx'
@@ -46,16 +48,22 @@ describe('Codex Assistant renderer', () => {
 
   it('interprets thread/start as layered control and retains protocol identity', () => {
     const block = lifecycleBlock()
-    expect(actionSummary(block, t)).toContain('分层共治')
-    expect(actionSummary(block, t)).toContain('1 个指令源')
+    const action = codexActionView(block)
+    expect(action).toBeDefined()
+    expect(actionSummary(action!, t)).toContain('分层共治')
+    expect(actionSummary(action!, t)).toContain('1 个指令源')
 
-    const html = renderToStaticMarkup(<CodexActionCard block={block} t={t} />)
+    const html = renderToStaticMarkup(<CodexActionRow action={action!} t={t} />)
     expect(html).toContain('data-codex-action="thread/start"')
+    expect(html).toContain('data-disclosure-row="true"')
+    expect(html).toContain('data-state="done"')
     expect(html).toContain('启动原生会话')
-    expect(html).toContain('协议事件')
-    expect(html).toContain('019ffe6a-2b42-7141-8f98-f6c6b4550027')
-    expect(html).toContain('完整 Codex 协议记录')
     expect(html).not.toContain('未知内容块')
+
+    const detailsHtml = renderToStaticMarkup(<CodexActionDetails action={action!} t={t} />)
+    expect(detailsHtml).toContain('协议事件')
+    expect(detailsHtml).toContain('019ffe6a-2b42-7141-8f98-f6c6b4550027')
+    expect(detailsHtml).toContain('aria-label="完整 Codex 协议记录"')
   })
 
   it('specializes codex-action while preserving the generic fallback', () => {
@@ -72,6 +80,28 @@ describe('Codex Assistant renderer', () => {
       <CodexAssistantBody blocks={generic} streaming={false} t={t} />,
     )
     expect(genericHtml).toContain('未知内容块')
+  })
+
+  it('renders earlier records without inventing a missing protocol event', () => {
+    const { category: _category, protocolEvent: _protocolEvent, ...legacy } = lifecycleBlock()
+    expect(isCodexActionBlock(legacy)).toBe(false)
+    expect(codexActionView(legacy)).toMatchObject({
+      category: 'lifecycle',
+      protocolEvent: undefined,
+      legacy: true,
+    })
+
+    const action = codexActionView(legacy)
+    const blocks: readonly AssistantBlock[] = [{ kind: 'other', block: legacy }]
+    const html = renderToStaticMarkup(
+      <CodexAssistantBody blocks={blocks} streaming={false} t={t} />,
+    )
+    expect(html).toContain('data-codex-action="thread/start"')
+    expect(html).not.toContain('未知内容块')
+
+    const detailsHtml = renderToStaticMarkup(<CodexActionDetails action={action!} t={t} />)
+    expect(detailsHtml).toContain('旧版记录未写入')
+    expect(detailsHtml).toContain('当时尚未写入 category 与 protocolEvent')
   })
 
   it('shadows the stock assistant cell without replacing its slot declaration', () => {

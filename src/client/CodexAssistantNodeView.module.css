@@ -61,75 +61,84 @@
   word-break: break-word;
 }
 
-.action {
+.actionRow {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
-  background: var(--dsw-alias-bg-layer-1);
-  font-size: 13px;
-  line-height: 20px;
 }
 
 .actionHeader {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
-.category,
-.phase {
-  flex: none;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-secondary);
-  font-size: 11px;
-  line-height: 18px;
-}
-
-.action[data-phase='failed'] .phase,
-.action[data-phase='declined'] .phase {
-  background: var(--dsw-alias-state-error-secondary);
-  color: var(--dsw-alias-state-error-primary);
-}
-
-.action[data-phase='started'] .phase,
-.action[data-phase='requested'] .phase {
-  background: var(--dsw-alias-state-business-tertiary);
-  color: var(--dsw-alias-state-business-primary);
+  gap: 0;
 }
 
 .actionTitle {
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 24px;
+}
+
+.actionSeparator {
+  flex: none;
+  width: 2px;
+  height: 2px;
+  margin: 0 8px;
+  border-radius: 1px;
+  background: var(--dsw-alias-label-caption);
+}
+
+.actionCategory {
   overflow: hidden;
   min-width: 0;
-  flex: 1;
-  color: var(--dsw-alias-label-primary);
-  font-size: 14px;
-  font-weight: 500;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  line-height: 24px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.actionType {
-  overflow-wrap: anywhere;
+.actionPhase {
+  flex: none;
+  margin-left: auto;
+  padding-left: 12px;
   color: var(--dsw-alias-label-caption);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 24px;
 }
 
-.actionSummary {
-  margin: 0;
+.actionRow[data-phase='failed'] .actionPhase {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.actionRow[data-phase='declined'] .actionPhase {
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.actionBody {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 4px 22px;
   color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.actionSummary,
+.legacy {
+  margin: 0;
+}
+
+.legacy {
+  color: var(--dsw-alias-state-warn-label);
 }
 
 .metadata {
   display: grid;
   margin: 0;
-  gap: 4px;
+  gap: 2px;
 }
 
 .metadata > div {
@@ -154,4 +163,8 @@
 
 .metadata code {
   font-family: inherit;
+}
+
+.actionJson {
+  margin-top: 2px;
 }

@@ -1,10 +1,10 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AssistantBlock } from '@deepseek-ai/dsh-client-runtime/client'
 import { ImageGallery } from '@deepseek-ai/dsh-client-ui-attachment'
 import type { ImageLoader, MessageImageLabels } from '@deepseek-ai/dsh-client-ui-attachment'
-import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
+import { DisclosureRow, JsonBlock, JsonTree, MarkdownText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MarkdownFileMentions, StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -13,6 +13,19 @@ import { NS } from './locales.ts'
 import css from './CodexAssistantNodeView.module.css'
 
 type CodexTranslate = TranslateNS<typeof NS>
+type CodexActionCategory = CodexActionBlock['category'] | 'legacy'
+
+/** Validated presentation fields over current and earlier durable records. */
+export interface CodexActionView {
+  readonly raw: Readonly<Record<string, unknown>>
+  readonly actionId: string
+  readonly actionType: string
+  readonly category: CodexActionCategory
+  readonly phase: CodexActionBlock['phase']
+  readonly protocolEvent: string | undefined
+  readonly snapshot: unknown
+  readonly legacy: boolean
+}
 
 const CATEGORIES = new Set<CodexActionBlock['category']>([
   'lifecycle',
@@ -50,6 +63,44 @@ export function isCodexActionBlock(value: unknown): value is CodexActionBlock {
     && Object.hasOwn(candidate, 'snapshot')
 }
 
+/** Decode a current record or the earlier format that omitted two presentation fields. */
+export function codexActionView(value: unknown): CodexActionView | undefined {
+  const candidate = record(value)
+  if (candidate?.type !== 'codex-action'
+    || typeof candidate.actionId !== 'string'
+    || typeof candidate.actionType !== 'string'
+    || typeof candidate.phase !== 'string'
+    || !PHASES.has(candidate.phase as CodexActionBlock['phase'])
+    || !Object.hasOwn(candidate, 'snapshot')) return undefined
+
+  if (isCodexActionBlock(candidate)) {
+    return {
+      raw: candidate,
+      actionId: candidate.actionId,
+      actionType: candidate.actionType,
+      category: candidate.category,
+      phase: candidate.phase,
+      protocolEvent: candidate.protocolEvent,
+      snapshot: candidate.snapshot,
+      legacy: false,
+    }
+  }
+  if (candidate.category !== undefined || candidate.protocolEvent !== undefined) return undefined
+  const category: CodexActionCategory = candidate.actionType === 'thread/start'
+    ? 'lifecycle'
+    : candidate.actionType === 'context/injected' ? 'context' : 'legacy'
+  return {
+    raw: candidate,
+    actionId: candidate.actionId,
+    actionType: candidate.actionType,
+    category,
+    phase: candidate.phase as CodexActionBlock['phase'],
+    protocolEvent: undefined,
+    snapshot: candidate.snapshot,
+    legacy: true,
+  }
+}
+
 function actionTitle(actionType: string, t: CodexTranslate): string {
   switch (actionType) {
     case 'thread/start': return t('action.type.threadStart')
@@ -63,6 +114,17 @@ function actionTitle(actionType: string, t: CodexTranslate): string {
   }
 }
 
+function phaseState(phase: CodexActionBlock['phase']): StateDotState {
+  switch (phase) {
+    case 'requested':
+    case 'started':
+    case 'updated': return 'ongoing'
+    case 'completed': return 'done'
+    case 'failed': return 'error'
+    case 'declined': return 'warning'
+  }
+}
+
 function stringValue(value: unknown): string | undefined {
   if (typeof value === 'string' && value.length > 0) return value
   if (Array.isArray(value) && value.every(part => typeof part === 'string')) return value.join(' ')
@@ -70,7 +132,7 @@ function stringValue(value: unknown): string | undefined {
 }
 
 /** Produce a concise interpretation while retaining the complete record below it. */
-export function actionSummary(block: CodexActionBlock, t: CodexTranslate): string | undefined {
+export function actionSummary(block: CodexActionView, t: CodexTranslate): string | undefined {
   const snapshot = record(block.snapshot)
   if (block.actionType === 'thread/start') {
     const sources = snapshot?.instructionSources
@@ -87,39 +149,60 @@ export function actionSummary(block: CodexActionBlock, t: CodexTranslate): strin
   return undefined
 }
 
-/** Dedicated presentation for one truthful Codex-native trajectory record. */
-export function CodexActionCard({ block, t }: { block: CodexActionBlock; t: CodexTranslate }) {
-  const summary = actionSummary(block, t)
+/** Expanded inspection content for a Codex-native trajectory row. */
+export function CodexActionDetails({ action, t }: { action: CodexActionView; t: CodexTranslate }) {
+  const summary = actionSummary(action, t)
   return (
-    <section
-      className={css.action}
-      data-codex-action={block.actionType}
-      data-category={block.category}
-      data-phase={block.phase}
-    >
-      <header className={css.actionHeader}>
-        <span className={css.category}>{t(`action.category.${block.category}`)}</span>
-        <strong className={css.actionTitle}>{actionTitle(block.actionType, t)}</strong>
-        <span className={css.phase}>{t(`action.phase.${block.phase}`)}</span>
-      </header>
-      <code className={css.actionType}>{block.actionType}</code>
+    <div className={css.actionBody}>
       {summary !== undefined && <p className={css.actionSummary}>{summary}</p>}
+      {action.legacy && <p className={css.legacy}>{t('action.legacy')}</p>}
       <dl className={css.metadata}>
         <div>
           <dt>{t('action.protocolEvent')}</dt>
-          <dd><code>{block.protocolEvent}</code></dd>
+          <dd><code>{action.protocolEvent ?? t('action.protocolUnavailable')}</code></dd>
         </div>
         <div>
           <dt>{t('action.id')}</dt>
-          <dd><code>{block.actionId}</code></dd>
+          <dd><code>{action.actionId}</code></dd>
         </div>
       </dl>
-      <JsonBlock
-        label={t('action.details')}
-        payload={block}
-        truncatedLabel={total => t('json.truncated', { total })}
-      />
-    </section>
+      <JsonTree className={css.actionJson} data={action.raw} label={t('action.details')} />
+    </div>
+  )
+}
+
+/** Harness-native compact row for one truthful Codex-native trajectory record. */
+export function CodexActionRow({ action, t }: { action: CodexActionView; t: CodexTranslate }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div
+      className={css.actionRow}
+      data-codex-action={action.actionType}
+      data-category={action.category}
+      data-phase={action.phase}
+      data-legacy={action.legacy || undefined}
+    >
+      <DisclosureRow
+        rowClassName={css.actionHeader}
+        titleClassName={css.actionTitle}
+        icon={<StateDot state={phaseState(action.phase)} />}
+        title={actionTitle(action.actionType, t)}
+        open={expanded}
+        expandable
+        expandOnRowClick
+        keepContentWhenOpen
+        onToggle={() => { setExpanded(value => !value) }}
+        collapsedContent={(
+          <>
+            <span className={css.actionSeparator} aria-hidden />
+            <span className={css.actionCategory}>{t(`action.category.${action.category}`)}</span>
+            <span className={css.actionPhase}>{t(`action.phase.${action.phase}`)}</span>
+          </>
+        )}
+      >
+        <CodexActionDetails action={action} t={t} />
+      </DisclosureRow>
+    </div>
   )
 }
 
@@ -223,18 +306,20 @@ export const CodexAssistantBody = memo(function CodexAssistantBody({
       }
       case 'tool-call':
         break
-      case 'other':
-        rendered.push(isCodexActionBlock(block.block)
-          ? <CodexActionCard key={index} block={block.block} t={t} />
+      case 'other': {
+        const action = codexActionView(block.block)
+        rendered.push(action !== undefined
+          ? <CodexActionRow key={index} action={action} t={t} />
           : (
-            <JsonBlock
-              key={index}
-              label={t('message.unknownBlock')}
-              payload={block.block}
-              truncatedLabel={total => t('json.truncated', { total })}
-            />
+              <JsonBlock
+                key={index}
+                label={t('message.unknownBlock')}
+                payload={block.block}
+                truncatedLabel={total => t('json.truncated', { total })}
+              />
             ))
         break
+      }
     }
   }
 
