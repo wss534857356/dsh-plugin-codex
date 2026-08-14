@@ -5,8 +5,10 @@ import {
   AppServerEventMapper,
   appServerDynamicTools,
   appServerHistory,
+  appServerToolResults,
   assertCompletedTurn,
   codexFailureCode,
+  extendAppServerHistory,
   harnessToolCall,
 } from '../src/protocol.ts'
 import type { CodexAppServerEvent } from '../src/runner.ts'
@@ -179,6 +181,51 @@ describe('App Server protocol translation', () => {
       call,
       { type: 'function_call_output', call_id: String(callId), output: 'Harness result' },
       secondReasoning,
+    ])
+  })
+
+  it('advances the synchronized history without replacing Harness tool results', () => {
+    const history = [
+      { type: 'reasoning', id: 'reasoning-1', encrypted_content: 'old' },
+      { type: 'function_call_output', call_id: 'call-1', output: 'Harness result' },
+    ]
+
+    expect(extendAppServerHistory(history, [
+      { type: 'reasoning', id: 'reasoning-1', encrypted_content: 'new' },
+      { type: 'function_call_output', call_id: 'call-1', output: 'provider echo' },
+      { type: 'message', id: 'answer-1', role: 'assistant', content: [] },
+    ])).toEqual([
+      { type: 'reasoning', id: 'reasoning-1', encrypted_content: 'new' },
+      { type: 'function_call_output', call_id: 'call-1', output: 'Harness result' },
+      { type: 'message', id: 'answer-1', role: 'assistant', content: [] },
+    ])
+  })
+
+  it('extracts exact successful and failed Harness tool outcomes', () => {
+    const first = CallId('call-1')
+    const second = CallId('call-2')
+    expect(appServerToolResults(options({
+      messages: [{
+        id: MessageId('tool-results'),
+        role: 'user',
+        source: { kind: 'tool', callId: first },
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: first,
+            content: [{ type: 'text', text: 'ok' }],
+          },
+          {
+            type: 'tool-result',
+            toolCallId: second,
+            content: [{ type: 'text', text: 'broken' }],
+            isError: true,
+          },
+        ],
+      }],
+    }))).toEqual([
+      { callId: 'call-1', output: 'ok', success: true },
+      { callId: 'call-2', output: 'Tool error:\nbroken', success: false },
     ])
   })
 

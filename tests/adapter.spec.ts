@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
-import { MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { CallId, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import { CodexAppServerAdapter } from '../src/adapter.ts'
 import type {
   CodexAppServerEvent,
   CodexAppServerRequest,
   CodexAppServerRunnerPort,
+  CodexAppServerThreadPort,
+  CodexAppServerThreadRequest,
+  CodexAppServerTurnRequest,
 } from '../src/runner.ts'
 
 function request(overrides: Partial<GenerateOptions> = {}): GenerateOptions {
@@ -38,6 +42,26 @@ function turnCompleted(status: 'completed' | 'failed' = 'completed'): CodexAppSe
   }
 }
 
+function instance(runner: CodexAppServerRunnerPort): CodexAppServerAdapter {
+  return new CodexAppServerAdapter({
+    provider: 'codex-local',
+    displayName: 'Codex local',
+    modelProvider: 'openai',
+    models: [{
+      id: 'gpt-5.6-sol',
+      name: 'GPT-5.6 Sol',
+      contextWindow: 272_000,
+      reasoningEfforts: ['low', 'high'],
+      defaultReasoningEffort: 'low',
+    }],
+    maxRetries: 0,
+    maxCachedSessions: 8,
+    sessionIdleTimeoutMs: 600_000,
+    onCleanupError: vi.fn(),
+    runner,
+  })
+}
+
 function adapter(events: readonly CodexAppServerEvent[]) {
   const stream = vi.fn((input: CodexAppServerRequest): AsyncIterable<CodexAppServerEvent> => {
     return (async function * () {
@@ -51,21 +75,38 @@ function adapter(events: readonly CodexAppServerEvent[]) {
   }
   return {
     stream,
-    adapter: new CodexAppServerAdapter({
-      provider: 'codex-local',
-      displayName: 'Codex local',
-      modelProvider: 'openai',
-      models: [{
-        id: 'gpt-5.6-sol',
-        name: 'GPT-5.6 Sol',
-        contextWindow: 272_000,
-        reasoningEfforts: ['low', 'high'],
-        defaultReasoningEffort: 'low',
-      }],
-      maxRetries: 0,
-      runner,
-    }),
+    adapter: instance(runner),
   }
+}
+
+function cachedAdapter(turns: readonly (readonly CodexAppServerEvent[])[]) {
+  const requests: CodexAppServerTurnRequest[] = []
+  const thread: CodexAppServerThreadPort = {
+    threadId: 'thread-1',
+    stream(input: CodexAppServerTurnRequest): AsyncIterable<CodexAppServerEvent> {
+      const events = turns[requests.length]
+      requests.push(input)
+      return (async function * () {
+        for (const event of events ?? []) yield event
+      })()
+    },
+    dispose: vi.fn(async () => {}),
+  }
+  const open = vi.fn(async (_input: CodexAppServerThreadRequest) => thread)
+  const oneShot = vi.fn((_input: CodexAppServerRequest) => (async function * () {})())
+  return {
+    adapter: instance({ open, stream: oneShot }),
+    open,
+    oneShot,
+    requests,
+    thread,
+  }
+}
+
+function replayState(chunks: readonly StreamChunk[]): unknown {
+  const finish = chunks.findLast(chunk => chunk.type === 'finish')
+  if (finish?.type !== 'finish') throw new Error('test stream emitted no finish')
+  return finish.replayState
 }
 
 async function collect(instance: CodexAppServerAdapter, options: GenerateOptions): Promise<StreamChunk[]> {
@@ -254,6 +295,220 @@ describe('CodexAppServerAdapter', () => {
         })],
       },
     })
+  })
+
+  it('reuses one session thread and appends the next user message through turn input', async () => {
+    const firstEvents: CodexAppServerEvent[] = [
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: {
+            type: 'message',
+            id: 'raw-answer-1',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'first answer' }],
+          },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'item/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { type: 'agentMessage', id: 'answer-1', text: 'first answer' },
+        },
+      },
+      turnCompleted(),
+    ]
+    const secondEvents: CodexAppServerEvent[] = [
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-2',
+          item: {
+            type: 'message',
+            id: 'raw-answer-2',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'second answer' }],
+          },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'item/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-2',
+          item: { type: 'agentMessage', id: 'answer-2', text: 'second answer' },
+        },
+      },
+      turnCompleted(),
+    ]
+    const cached = cachedAdapter([firstEvents, secondEvents])
+    const firstRequest = request({ sessionId: SessionId('session-1') })
+    const firstChunks = await collect(cached.adapter, firstRequest)
+    const firstAnswer: Message = {
+      id: MessageId('assistant-1'),
+      role: 'assistant',
+      source: {
+        kind: 'model',
+        provider: 'codex-local',
+        model: 'gpt-5.6-sol',
+        replayState: replayState(firstChunks),
+      },
+      content: [{ type: 'text', text: 'first answer' }],
+    }
+    const followUp: Message = {
+      id: MessageId('user-2'),
+      role: 'user',
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: 'follow up' }],
+    }
+
+    const secondChunks = await collect(cached.adapter, request({
+      sessionId: SessionId('session-1'),
+      messages: [...firstRequest.messages, firstAnswer, followUp],
+    }))
+
+    expect(cached.open).toHaveBeenCalledOnce()
+    expect(cached.oneShot).not.toHaveBeenCalled()
+    expect(cached.requests).toHaveLength(2)
+    expect(cached.requests[0]).toMatchObject({
+      injectedItems: [],
+      input: [{ type: 'text', text: 'hello', text_elements: [] }],
+    })
+    expect(cached.requests[1]).toMatchObject({
+      input: [{ type: 'text', text: 'follow up', text_elements: [] }],
+    })
+    expect(secondChunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    await cached.adapter.dispose()
+  })
+
+  it('continues a pending tool callback and reports cache usage at the tool boundary', async () => {
+    const toolEvents: CodexAppServerEvent[] = [
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: {
+            type: 'function_call',
+            id: 'provider-item-1',
+            call_id: 'call-1',
+            name: 'read_file',
+            arguments: '{"path":"a.txt"}',
+          },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'rawResponse/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          usage: {
+            inputTokens: 100,
+            cachedInputTokens: 80,
+            outputTokens: 5,
+          },
+        },
+      },
+      {
+        kind: 'server-request',
+        id: 'rpc-1',
+        method: 'item/tool/call',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          callId: 'call-1',
+          namespace: null,
+          tool: 'read_file',
+          arguments: { path: 'a.txt' },
+        },
+        resolution: 'rejected',
+      },
+    ]
+    const completionEvents: CodexAppServerEvent[] = [
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: {
+            type: 'message',
+            id: 'raw-answer-1',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'contents received' }],
+          },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'item/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { type: 'agentMessage', id: 'answer-1', text: 'contents received' },
+        },
+      },
+      turnCompleted(),
+    ]
+    const cached = cachedAdapter([toolEvents, completionEvents])
+    const tools = [{
+      name: 'read_file',
+      description: 'Read one file.',
+      parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+    }]
+    const firstRequest = request({ sessionId: SessionId('session-1'), tools })
+    const firstChunks = await collect(cached.adapter, firstRequest)
+    expect(firstChunks).toContainEqual({
+      type: 'usage',
+      usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 80 },
+    })
+    const callId = CallId('call-1')
+    const firstAnswer: Message = {
+      id: MessageId('assistant-1'),
+      role: 'assistant',
+      source: {
+        kind: 'model',
+        provider: 'codex-local',
+        model: 'gpt-5.6-sol',
+        replayState: replayState(firstChunks),
+      },
+      content: [{ type: 'tool-call', id: callId, name: 'read_file', arguments: '{"path":"a.txt"}' }],
+    }
+    const result: Message = {
+      id: MessageId('tool-1'),
+      role: 'user',
+      source: { kind: 'tool', callId },
+      content: [{
+        type: 'tool-result',
+        toolCallId: callId,
+        content: [{ type: 'text', text: 'contents' }],
+        isError: false,
+      }],
+    }
+
+    const secondChunks = await collect(cached.adapter, request({
+      sessionId: SessionId('session-1'),
+      tools,
+      messages: [...firstRequest.messages, firstAnswer, result],
+    }))
+
+    expect(cached.open).toHaveBeenCalledOnce()
+    expect(cached.requests[1]).toMatchObject({
+      toolResult: { callId: 'call-1', output: 'contents', success: true },
+    })
+    expect(secondChunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    await cached.adapter.dispose()
   })
 
   it('hands dynamic tools to Harness and ends the step without provider execution', async () => {

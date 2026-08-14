@@ -13,7 +13,11 @@ import type {
   TokenUsage,
   ToolSchema,
 } from '@deepseek-ai/dsh-llm'
-import type { CodexAppServerEvent, JsonValue } from './runner.ts'
+import type {
+  CodexAppServerEvent,
+  CodexAppServerToolResult,
+  JsonValue,
+} from './runner.ts'
 
 const REPLAY_KIND = 'codex-app-server'
 const REPLAY_VERSION = 1
@@ -299,6 +303,37 @@ export function appServerHistory(options: GenerateOptions): JsonValue[] {
     flushText()
   }
   return history
+}
+
+function existingHistoryOrigin(item: JsonValue): HistoryItemOrigin {
+  if (item === null || typeof item !== 'object' || Array.isArray(item)) return 'provider'
+  if (item.type === 'function_call_output') return 'harness'
+  if (item.type === 'message' && item.role !== 'assistant') return 'harness'
+  return 'provider'
+}
+
+/** Append newly logged provider outputs using the same identities as request reconstruction. */
+export function extendAppServerHistory(
+  history: readonly JsonValue[],
+  outputs: readonly JsonValue[],
+): JsonValue[] {
+  const extended: JsonValue[] = []
+  const identities = new Map<string, HistoryIdentitySlot>()
+  for (const item of history) appendHistoryItem(extended, identities, item, existingHistoryOrigin(item))
+  for (const item of outputs) appendHistoryItem(extended, identities, item, 'provider')
+  return extended
+}
+
+/** Extract logged Harness tool outcomes for exact App Server callback continuation. */
+export function appServerToolResults(options: GenerateOptions): CodexAppServerToolResult[] {
+  return options.messages.flatMap(message => message.content.flatMap((block): CodexAppServerToolResult[] => {
+    if (block.type !== 'tool-result') return []
+    return [{
+      callId: String(block.toolCallId),
+      output: resultOutput(block),
+      success: block.isError !== true,
+    }]
+  }))
 }
 
 /** Translate the exact Harness tool catalog to App Server dynamic tools. */

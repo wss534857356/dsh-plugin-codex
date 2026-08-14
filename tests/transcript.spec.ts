@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime, {
   BlockAssembler,
@@ -11,11 +11,15 @@ import type {
   Message,
   ToolSchema,
 } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import { CodexAppServerAdapter } from '../src/adapter.ts'
 import type {
   CodexAppServerEvent,
   CodexAppServerRequest,
   CodexAppServerRunnerPort,
+  CodexAppServerThreadPort,
+  CodexAppServerThreadRequest,
+  CodexAppServerTurnRequest,
 } from '../src/runner.ts'
 
 const PROVIDER = 'codex-local'
@@ -43,22 +47,33 @@ function completedTurn(): CodexAppServerEvent {
     kind: 'notification',
     method: 'turn/completed',
     params: {
-      threadId: 'thread-2',
-      turn: { id: 'turn-2', status: 'completed', error: null },
+      threadId: 'thread-1',
+      turn: { id: 'turn-1', status: 'completed', error: null },
     },
   }
 }
 
 class TranscriptRunner implements CodexAppServerRunnerPort {
-  readonly requests: CodexAppServerRequest[] = []
+  readonly openRequests: CodexAppServerThreadRequest[] = []
+  readonly turnRequests: CodexAppServerTurnRequest[] = []
+  readonly dispose = vi.fn(async () => {})
 
-  async open(): Promise<never> {
-    throw new Error('stateful runner was not expected')
+  async open(request: CodexAppServerThreadRequest): Promise<CodexAppServerThreadPort> {
+    this.openRequests.push(request)
+    return {
+      threadId: 'thread-1',
+      stream: turn => this.turn(turn),
+      dispose: this.dispose,
+    }
   }
 
-  async * stream(request: CodexAppServerRequest): AsyncIterable<CodexAppServerEvent> {
-    this.requests.push(request)
-    if (this.requests.length === 1) {
+  async * stream(_request: CodexAppServerRequest): AsyncIterable<CodexAppServerEvent> {
+    throw new Error('one-shot runner was not expected')
+  }
+
+  private async * turn(request: CodexAppServerTurnRequest): AsyncIterable<CodexAppServerEvent> {
+    this.turnRequests.push(request)
+    if (this.turnRequests.length === 1) {
       yield {
         kind: 'thread-started',
         threadId: 'thread-1',
@@ -147,17 +162,11 @@ class TranscriptRunner implements CodexAppServerRunnerPort {
       return
     }
     yield {
-      kind: 'thread-started',
-      threadId: 'thread-2',
-      userAgent: 'deepseek-harness/0.147.0',
-      instructionSources: [],
-    }
-    yield {
       kind: 'notification',
       method: 'item/agentMessage/delta',
       params: {
-        threadId: 'thread-2',
-        turnId: 'turn-2',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
         itemId: 'message-2',
         delta: 'The file says hello.',
       },
@@ -166,8 +175,8 @@ class TranscriptRunner implements CodexAppServerRunnerPort {
       kind: 'notification',
       method: 'rawResponseItem/completed',
       params: {
-        threadId: 'thread-2',
-        turnId: 'turn-2',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
         item: {
           type: 'message',
           role: 'assistant',
@@ -179,8 +188,8 @@ class TranscriptRunner implements CodexAppServerRunnerPort {
       kind: 'notification',
       method: 'item/completed',
       params: {
-        threadId: 'thread-2',
-        turnId: 'turn-2',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
         item: { type: 'agentMessage', id: 'message-2', text: 'The file says hello.' },
       },
     }
@@ -199,6 +208,7 @@ async function assemble(
     system: 'Use Harness tools for project data.',
     messages,
     tools: [tool],
+    sessionId: SessionId('transcript-session'),
   }
   for await (const chunk of prepared.stream(request)) assembler.push(chunk)
   return {
@@ -218,14 +228,19 @@ describe('assembled Harness transcript', () => {
     contexts.push(ctx)
     await ctx.plugin(LlmRuntime)
     const runner = new TranscriptRunner()
-    ctx.llm.registerAdapter([PROVIDER], new CodexAppServerAdapter({
+    const adapter = new CodexAppServerAdapter({
       provider: PROVIDER,
       displayName: 'Codex local',
       modelProvider: 'openai',
       models: [{ id: MODEL, name: 'GPT-5.6 Sol', reasoningEfforts: ['low'] }],
       maxRetries: 0,
+      maxCachedSessions: 8,
+      sessionIdleTimeoutMs: 600_000,
+      onCleanupError: vi.fn(),
       runner,
-    }))
+    })
+    ctx.llm.registerAdapter([PROVIDER], adapter)
+    ctx.effect(() => () => adapter.dispose(), 'transcript: dispose cached Codex session')
 
     const user = createUserMessage({
       source: { kind: 'user' },
@@ -245,7 +260,10 @@ describe('assembled Harness transcript', () => {
 
     expect({
       first: { finish: first.finish, content: first.message.content },
-      secondRequestHistory: runner.requests[1]?.history,
+      transport: {
+        openCount: runner.openRequests.length,
+        turns: runner.turnRequests,
+      },
       second: { finish: second.finish, content: second.message.content },
     }).toMatchSnapshot()
   })

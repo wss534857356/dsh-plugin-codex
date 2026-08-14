@@ -15,3 +15,5 @@
         disposeGraceMs: 3000
         maxJsonRpcLineBytes: 4194304
         maxStderrBytes: 65536
+        maxCachedSessions: 8
+        sessionIdleTimeoutMs: 600000

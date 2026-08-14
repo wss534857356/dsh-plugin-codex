@@ -6,17 +6,17 @@ This differs from Harness's built-in `@deepseek-ai/dsh-subagent-codex`. The buil
 
 ## How it works
 
-Every Harness model step starts the pinned `@openai/codex@0.147.0` App Server in a private empty directory and creates one ephemeral thread. The process uses the native Codex account state under `CODEX_HOME`; the plugin never reads, copies, logs, or stores OAuth tokens or API keys.
+An ordinary Harness conversation session reuses one pinned `@openai/codex@0.147.0` App Server in a private empty directory and one ephemeral thread while its bounded cache lease remains valid. The process uses the native Codex account state under `CODEX_HOME`; the plugin never reads, copies, logs, or stores OAuth tokens or API keys. Requests without a session id and auxiliary requests remain one-shot.
 
-The adapter supplies the Harness system text as App Server base instructions, reconstructs the ordered conversation from logged Harness messages through `thread/inject_items`, declares Harness tools as App Server dynamic tools, and starts an empty turn. App Server still adds Codex-owned instructions and tools. This is deliberately a layered provider, not a raw-model transport or a claim that Harness replaces the Codex prompt.
+The adapter supplies the Harness system text as App Server base instructions, reconstructs cold threads from logged Harness messages, declares Harness tools as App Server dynamic tools, and sends ordinary user messages through native turn input. A warm thread is reused only when the complete request is the exact expected continuation; otherwise it is discarded and rebuilt. App Server still adds Codex-owned instructions and tools. This is deliberately a layered provider, not a raw-model transport or a claim that Harness replaces the Codex prompt.
 
-Reasoning, assistant text, usage, Codex-owned context, diagnostics, and action lifecycles are converted to Harness stream events as they arrive. Each `codex-action` block carries a `category` (`lifecycle`, `context`, `action`, or `diagnostic`), the parsed `phase`, the exact `protocolEvent`, and the lossless protocol snapshot. Raw Code Mode calls and outcomes are included even when App Server emits no corresponding `ThreadItem`. A failed or declined Codex-native action remains an action outcome and does not fail the Harness model request unless App Server reports that the turn itself failed.
+Reasoning, assistant text, usage, Codex-owned context, diagnostics, and action lifecycles are converted to Harness stream events as they arrive. Codex cached input is reported through Harness `cacheReadTokens`, so the standard token meter and conversation statistics display the cache-hit percentage without provider-specific UI. Each `codex-action` block carries a `category` (`lifecycle`, `context`, `action`, or `diagnostic`), the parsed `phase`, the exact `protocolEvent`, and the lossless protocol snapshot. Raw Code Mode calls and outcomes are included even when App Server emits no corresponding `ThreadItem`. A failed or declined Codex-native action remains an action outcome and does not fail the Harness model request unless App Server reports that the turn itself failed.
 
 The package also ships a browser plugin. It shadows the stock Assistant cell at a lower slot priority, preserves the standard text, reasoning, image, and generic fallback presentations, and renders `codex-action` blocks with Harness's compact disclosure row and state dot. The collapsed row shows the interpreted action, category, and phase; expanding it reveals the summary, exact protocol event, action id, and the lossless record in Harness's JSON tree. `thread/start` explicitly reports layered prompt ownership and discovered instruction-source count; it is not labeled as a Harness tool or request failure.
 
 The `thread/start` block is provider lifecycle disclosure, not evidence that the model performed a native action. Codex-added developer, system, and user messages that are not part of injected Harness history appear as `context/injected` reports. They remain logged for audit but are not fed back as Harness-authored history on the next stateless request.
 
-When App Server requests a declared dynamic tool, the adapter emits a real Harness `tool-call`, ends that model step, and tears down the App Server process without returning a provider-side tool result. A raw Responses call whose name is a declared Harness tool is not also reported as a Codex-native action. Harness owns execution, approval, presentation, and durable logging. The next step injects the logged tool result together with the prior raw provider outputs.
+When App Server requests a declared dynamic tool, the adapter emits a real Harness `tool-call`, ends that model step, and leaves the App Server callback pending. A raw Responses call whose name is a declared Harness tool is not also reported as a Codex-native action. Harness owns execution, approval, presentation, and durable logging. An exact next request replies with the logged tool result and continues the same Codex turn; a mismatch forces a cold reconstruction.
 
 ## Install
 
@@ -62,6 +62,8 @@ Later profile patch layers can replace the `llm-codex-app-server` row. A replace
 | `maxJsonRpcLineBytes` | `4194304` | Maximum bytes accepted for one newline-delimited App Server JSON-RPC message. Parsed messages do not count toward a cumulative stdout limit. |
 | `maxStderrBytes` | `65536` | Maximum retained diagnostic output. |
 | `maxRetries` | `0` | Harness-visible retries for transient process or provider failures. |
+| `maxCachedSessions` | `8` | Maximum idle or tool-waiting session leases retained before least-recently-used eviction. Active requests may temporarily exceed it. |
+| `sessionIdleTimeoutMs` | `600000` | Idle lifetime of a cached App Server session thread. |
 | `env` | `{}` | Explicit child environment layered over Harness's scrubbed parent environment. Use this to pass `CODEX_HOME` when it is nonstandard. |
 
 Example override:
@@ -84,6 +86,8 @@ Example override:
     maxJsonRpcLineBytes: 4194304
     maxStderrBytes: 65536
     maxRetries: 0
+    maxCachedSessions: 8
+    sessionIdleTimeoutMs: 600000
     env:
       CODEX_HOME: !!js process.env.CODEX_HOME
 ```
@@ -98,13 +102,13 @@ Example override:
 - The provider accepts text input. Image input is rejected before process startup.
 - `temperature`, `maxTokens`, and `stop` are rejected because this App Server path does not expose reliable equivalents. Auxiliary calls that require `maxTokens`, including LLM-backed session titles and basic compaction, cannot use this provider.
 - `CODEX_INTERNAL_ORIGINATOR_OVERRIDE=deepseek-harness` identifies adapter requests; this internal compatibility point is reverified on Codex upgrades.
-- Each model step uses a fresh ephemeral thread. Durable Harness messages and adapter replay state reconstruct model-visible history; no Codex thread is resumed.
+- Session-scoped threads are in-memory disposable caches. The Harness log and adapter replay state reconstruct model-visible history after process restart, plugin reload, expiry, eviction, compaction, fork, repair, retry mismatch, or any changed request epoch; Codex rollout files are never resumed.
 - Replay state version `1` contains only provider outputs in `items`; observed Codex-owned context is retained separately in `contextItems` for audit and never reinjected. Reconstruction coalesces cumulative snapshots by stable provider item or call identity, so sessions written by older plugin versions do not multiply the same opaque outputs on later requests. Older replay versions fall back to Harness message reconstruction.
 - Authentication and subscription availability belong to the native Codex installation. Login failures surface as Harness `AUTH` failures; the plugin provides no credential UI.
 
 ## Development
 
-The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound request. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts the implemented ownership split. [ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) records how raw actions, provider context, replay, and Harness tool calls remain distinct. [ADR 0004](docs/adr/0004-render-codex-trajectory-in-the-browser-plugin.md) records the client renderer shadow used by the out-of-tree bundle. [ADR 0005](docs/adr/0005-coalesce-stateless-codex-replay.md) bounds stateless replay reconstruction by provider identity.
+The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound request. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts the implemented ownership split. [ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) records how raw actions, provider context, replay, and Harness tool calls remain distinct. [ADR 0004](docs/adr/0004-render-codex-trajectory-in-the-browser-plugin.md) records the client renderer shadow used by the out-of-tree bundle. [ADR 0005](docs/adr/0005-coalesce-stateless-codex-replay.md) bounds cold replay reconstruction by provider identity. [ADR 0006](docs/adr/0006-reuse-disposable-session-threads.md) defines exact session continuation and disposable cache ownership.
 
 ```sh
 pnpm run typecheck

@@ -1,6 +1,7 @@
 /** DeepSeek Harness main-model provider backed by the locally authenticated Codex App Server. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 import { CodexAppServerAdapter } from './adapter.ts'
 import type { CodexModel } from './adapter.ts'
@@ -57,6 +58,8 @@ export interface Config {
   maxJsonRpcLineBytes?: number
   maxStderrBytes?: number
   maxRetries?: number
+  maxCachedSessions?: number
+  sessionIdleTimeoutMs?: number
   env?: Record<string, string>
 }
 
@@ -88,6 +91,8 @@ export const Config: z<Config> = z.object({
   maxJsonRpcLineBytes: z.number().step(1).min(1).default(4 * 1024 * 1024),
   maxStderrBytes: z.number().step(1).min(1).default(64 * 1024),
   maxRetries: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+  maxCachedSessions: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(8),
+  sessionIdleTimeoutMs: z.number().step(1).min(1).max(2_147_483_647).default(600_000),
   env: z.dict(z.string()).default({}),
 })
 
@@ -101,6 +106,8 @@ interface ResolvedConfig {
   readonly maxJsonRpcLineBytes: number
   readonly maxStderrBytes: number
   readonly maxRetries: number
+  readonly maxCachedSessions: number
+  readonly sessionIdleTimeoutMs: number
   readonly env: Readonly<Record<string, string>>
 }
 
@@ -115,6 +122,8 @@ function resolveConfig(config: Config): ResolvedConfig {
   const maxJsonRpcLineBytes = config.maxJsonRpcLineBytes ?? 4 * 1024 * 1024
   const maxStderrBytes = config.maxStderrBytes ?? 64 * 1024
   const maxRetries = config.maxRetries ?? 0
+  const maxCachedSessions = config.maxCachedSessions ?? 8
+  const sessionIdleTimeoutMs = config.sessionIdleTimeoutMs ?? 600_000
   const env = config.env ?? {}
   if (!SAFE_ROUTE.test(provider)) throw new Error('llm-codex-app-server: provider is not a safe route id')
   if (displayName.trim().length === 0) throw new Error('llm-codex-app-server: displayName must not be empty')
@@ -135,6 +144,14 @@ function resolveConfig(config: Config): ResolvedConfig {
   }
   if (!Number.isSafeInteger(maxRetries) || maxRetries < 0) {
     throw new Error('llm-codex-app-server: maxRetries must be a non-negative safe integer')
+  }
+  if (!Number.isSafeInteger(maxCachedSessions) || maxCachedSessions <= 0) {
+    throw new Error('llm-codex-app-server: maxCachedSessions must be a positive safe integer')
+  }
+  if (!Number.isSafeInteger(sessionIdleTimeoutMs)
+    || sessionIdleTimeoutMs <= 0
+    || sessionIdleTimeoutMs > 2_147_483_647) {
+    throw new Error('llm-codex-app-server: sessionIdleTimeoutMs must be a positive timer duration')
   }
   const configuredModels = config.models ?? DEFAULT_MODELS
   if (configuredModels.length === 0) throw new Error('llm-codex-app-server: models must not be empty')
@@ -172,6 +189,8 @@ function resolveConfig(config: Config): ResolvedConfig {
     maxJsonRpcLineBytes,
     maxStderrBytes,
     maxRetries,
+    maxCachedSessions,
+    sessionIdleTimeoutMs,
     env,
   }
 }
@@ -187,12 +206,23 @@ export function apply(ctx: Context, config: Config): void {
     env: resolved.env,
     spawn: spec => ctx.subprocess.spawn(spec),
   })
-  ctx.llm.registerAdapter([resolved.provider], new CodexAppServerAdapter({
+  const reportCleanupError = (error: unknown): void => {
+    ctx.logger.warn(`llm-codex-app-server: cached session cleanup failed: ${String(error)}`)
+  }
+  const adapter = new CodexAppServerAdapter({
     provider: resolved.provider,
     displayName: resolved.displayName,
     modelProvider: resolved.modelProvider,
     models: resolved.models,
     maxRetries: resolved.maxRetries,
+    maxCachedSessions: resolved.maxCachedSessions,
+    sessionIdleTimeoutMs: resolved.sessionIdleTimeoutMs,
+    onCleanupError: reportCleanupError,
     runner,
-  }))
+  })
+  ctx.llm.registerAdapter([resolved.provider], adapter)
+  ctx.on('session/disposed', (session) => {
+    void adapter.disposeSession(String(session.id)).catch(reportCleanupError)
+  })
+  ctx.effect(() => () => adapter.dispose(), 'llm-codex-app-server: dispose cached sessions')
 }

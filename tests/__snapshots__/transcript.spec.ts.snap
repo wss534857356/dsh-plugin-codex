@@ -85,21 +85,6 @@ exports[`assembled Harness transcript > keeps Codex actions distinct from Harnes
   "second": {
     "content": [
       {
-        "actionId": "thread-2",
-        "actionType": "thread/start",
-        "category": "lifecycle",
-        "phase": "completed",
-        "protocolEvent": "thread/start",
-        "snapshot": {
-          "codexOwnedPromptAndTools": true,
-          "instructionSources": [],
-          "ownership": "layered",
-          "threadId": "thread-2",
-          "userAgent": "deepseek-harness/0.147.0",
-        },
-        "type": "codex-action",
-      },
-      {
         "text": "The file says hello.",
         "type": "text",
       },
@@ -108,28 +93,27 @@ exports[`assembled Harness transcript > keeps Codex actions distinct from Harnes
       "kind": "stop",
     },
   },
-  "secondRequestHistory": [
-    {
-      "content": [
-        {
-          "text": "Read notes.txt.",
-          "type": "input_text",
+  "transport": {
+    "openCount": 1,
+    "turns": [
+      {
+        "injectedItems": [],
+        "input": [
+          {
+            "text": "Read notes.txt.",
+            "text_elements": [],
+            "type": "text",
+          },
+        ],
+      },
+      {
+        "toolResult": {
+          "callId": "call-read-1",
+          "output": "hello",
+          "success": true,
         },
-      ],
-      "role": "user",
-      "type": "message",
-    },
-    {
-      "arguments": "{"path":"notes.txt"}",
-      "call_id": "call-read-1",
-      "name": "read_file",
-      "type": "function_call",
-    },
-    {
-      "call_id": "call-read-1",
-      "output": "hello",
-      "type": "function_call_output",
-    },
-  ],
+      },
+    ],
+  },
 }
 `;

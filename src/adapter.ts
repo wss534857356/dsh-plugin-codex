@@ -17,10 +17,19 @@ import {
   AppServerEventMapper,
   appServerDynamicTools,
   appServerHistory,
+  appServerToolResults,
   assertCompletedTurn,
+  extendAppServerHistory,
   harnessToolCall,
 } from './protocol.ts'
-import type { CodexAppServerRunnerPort } from './runner.ts'
+import { CODEX_APP_SERVER_VERSION } from './runner.ts'
+import type {
+  CodexAppServerEvent,
+  CodexAppServerRunnerPort,
+  JsonValue,
+} from './runner.ts'
+import { CodexSessionCache } from './session-cache.ts'
+import type { CodexSessionStep } from './session-cache.ts'
 
 /** One model exposed in the Harness selector. */
 export interface CodexModel {
@@ -39,6 +48,9 @@ export interface CodexAdapterOptions {
   readonly modelProvider: string
   readonly models: readonly CodexModel[]
   readonly maxRetries: number
+  readonly maxCachedSessions: number
+  readonly sessionIdleTimeoutMs: number
+  readonly onCleanupError: (error: unknown) => void
   readonly runner: CodexAppServerRunnerPort
 }
 
@@ -56,8 +68,16 @@ function modelInfo(provider: string, model: CodexModel): LlmModelInfo {
 
 /** Main-model adapter that maps live App Server events into the Harness loop. */
 export class CodexAppServerAdapter extends LlmAdapter {
+  private readonly cache: CodexSessionCache
+
   constructor(private readonly options: CodexAdapterOptions) {
     super()
+    this.cache = new CodexSessionCache({
+      runner: options.runner,
+      maxSessions: options.maxCachedSessions,
+      idleTimeoutMs: options.sessionIdleTimeoutMs,
+      onCleanupError: options.onCleanupError,
+    })
   }
 
   override providerInfo(provider: string): LlmProviderInfo {
@@ -120,43 +140,103 @@ export class CodexAppServerAdapter extends LlmAdapter {
       )
     }
     const history = appServerHistory(options)
+    const dynamicTools = appServerDynamicTools(options.tools)
     const mapper = new AppServerEventMapper(history, options.tools?.map(tool => tool.name))
-    for await (const event of this.options.runner.stream({
-      model: options.model,
-      modelProvider: this.options.modelProvider,
-      ...(options.reasoningEffort === undefined
-        ? {}
-        : { reasoningEffort: String(options.reasoningEffort) }),
-      system: options.system ?? '',
-      history,
-      dynamicTools: appServerDynamicTools(options.tools),
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-    })) {
-      for (const chunk of mapper.accept(event)) yield chunk
-      if (event.kind === 'server-request' && event.method === 'item/tool/call') {
-        for (const chunk of mapper.closeOpen()) yield chunk
-        const call = harnessToolCall(event, options.tools)
-        for (const chunk of mapper.toolCall(call)) yield chunk
-        yield {
-          type: 'finish',
-          reason: { kind: 'tool-calls' },
-          replayState: mapper.replayState(),
-        }
-        return
-      }
-      if (event.kind === 'notification' && event.method === 'turn/completed') {
-        for (const chunk of mapper.closeOpen()) yield chunk
-        assertCompletedTurn(event)
-        const usage = mapper.usage()
-        if (usage !== undefined) yield { type: 'usage', usage }
-        yield {
-          type: 'finish',
-          reason: { kind: 'stop' },
-          replayState: mapper.replayState(),
-        }
-        return
-      }
+    const reasoningEffort = options.reasoningEffort === undefined
+      ? undefined
+      : String(options.reasoningEffort)
+    let cached: CodexSessionStep | undefined
+    let events: AsyncIterable<CodexAppServerEvent>
+    if (options.sessionId === undefined || options.purpose !== undefined) {
+      events = this.options.runner.stream({
+        model: options.model,
+        modelProvider: this.options.modelProvider,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        system: options.system ?? '',
+        history,
+        dynamicTools,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      })
+    } else {
+      cached = await this.cache.begin({
+        sessionId: String(options.sessionId),
+        epoch: this.cacheEpoch(options, dynamicTools),
+        thread: {
+          model: options.model,
+          modelProvider: this.options.modelProvider,
+          system: options.system ?? '',
+          dynamicTools,
+        },
+        history,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        toolResults: appServerToolResults(options),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      })
+      events = cached.events
     }
-    throw new LlmError('Codex App Server stream ended without a terminal event', 'TRANSPORT')
+    let retained = false
+    try {
+      for await (const event of events) {
+        for (const chunk of mapper.accept(event)) yield chunk
+        if (event.kind === 'server-request' && event.method === 'item/tool/call') {
+          for (const chunk of mapper.closeOpen()) yield chunk
+          const call = harnessToolCall(event, options.tools)
+          for (const chunk of mapper.toolCall(call)) yield chunk
+          const usage = mapper.usage()
+          if (usage !== undefined) yield { type: 'usage', usage }
+          const replayState = mapper.replayState()
+          cached?.commit(extendAppServerHistory(history, replayState.items), String(call.id))
+          retained = true
+          yield {
+            type: 'finish',
+            reason: { kind: 'tool-calls' },
+            replayState,
+          }
+          return
+        }
+        if (event.kind === 'notification' && event.method === 'turn/completed') {
+          for (const chunk of mapper.closeOpen()) yield chunk
+          assertCompletedTurn(event)
+          const usage = mapper.usage()
+          if (usage !== undefined) yield { type: 'usage', usage }
+          const replayState = mapper.replayState()
+          cached?.commit(extendAppServerHistory(history, replayState.items))
+          retained = true
+          yield {
+            type: 'finish',
+            reason: { kind: 'stop' },
+            replayState,
+          }
+          return
+        }
+      }
+      throw new LlmError('Codex App Server stream ended without a terminal event', 'TRANSPORT')
+    } finally {
+      if (!retained) await cached?.discard()
+    }
+  }
+
+  /** Dispose the cached process for one ended Harness session. */
+  disposeSession(sessionId: string): Promise<void> {
+    return this.cache.disposeSession(sessionId)
+  }
+
+  /** Dispose every cached process owned by this adapter. */
+  dispose(): Promise<void> {
+    return this.cache.dispose()
+  }
+
+  private cacheEpoch(options: GenerateOptions, dynamicTools: readonly JsonValue[]): JsonValue {
+    return {
+      version: 1,
+      appServerVersion: CODEX_APP_SERVER_VERSION,
+      provider: options.provider,
+      modelProvider: this.options.modelProvider,
+      model: options.model,
+      reasoningEffort: options.reasoningEffort === undefined ? null : String(options.reasoningEffort),
+      system: options.system ?? '',
+      dynamicTools: [...dynamicTools],
+      threadPolicy: 'harness-read-only-v1',
+    }
   }
 }
