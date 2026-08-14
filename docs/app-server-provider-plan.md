@@ -1,10 +1,10 @@
-# App Server provider plan
+# App Server provider investigation
 
 ## Goal
 
-Turn the locally authenticated Codex CLI into a Harness-owned main-model provider. Harness must own the client instruction layer, durable conversation, tool catalog, tool execution, permissions, and session presentation; the Codex process must only authenticate, carry requests, and stream model events.
+Determine whether the locally authenticated Codex App Server can act as a Harness-owned main-model provider. Harness must own the client instruction layer, durable conversation, tool catalog, tool execution, permissions, and session presentation; the Codex process must only authenticate, carry requests, and stream model events.
 
-The proof boundary is the decoded request emitted by the pinned Codex client. The plugin cannot replace or inspect OpenAI service-side policies and does not claim to do so.
+The proof boundary is the decoded request emitted by the pinned Codex client. The plugin cannot replace or inspect OpenAI service-side policies and does not claim to do so. The investigation failed its prompt-ownership gate before implementation.
 
 ## Required invariants
 
@@ -57,6 +57,27 @@ Runtime checks complement the capture test:
 - native action items fail with a stable protocol error;
 - the installed Codex version and generated protocol schema must match the pinned baseline.
 
+## Result
+
+The pinned App Server cannot satisfy invariants 1, 2, 4, or 6 for `gpt-5.6-sol`.
+
+The keyless test applies every protocol-level isolation control available in Codex `0.147.0`: a fresh home and workspace, explicit base and empty developer instructions, no personality or collaboration mode, empty environment and capability roots, disabled native features, disabled discovered skills, read-only execution, and denied approvals. `thread/start` reports no `instructionSources`, yet the outbound Responses request still contains:
+
+- the Harness base prompt as only one developer message;
+- Codex-owned permission, primary-agent, multi-agent, and environment-context messages after it;
+- a Codex `functions.exec` tool layer that includes the Harness dynamic tool together with Codex plan and skills tools;
+- Codex interaction and collaboration tools that were not declared by Harness.
+
+For a generic model family, App Server places the Harness base prompt in top-level `instructions`, but still adds permission and environment messages plus plan, interaction, skills, and web-search tools. Model selection therefore changes the encoding but does not establish Harness-only ownership.
+
+`baseInstructions`, `developerInstructions`, `dynamicTools`, and empty `instructionSources` are insufficient evidence for an exact client request. App Server has no documented raw-model mode or field that suppresses these remaining additions.
+
+No implementation stage follows automatically. The product decision must choose one of these foundations:
+
+1. Preserve prompt ownership by adding a direct Responses API provider backed by an API key.
+2. Preserve local Codex login by accepting a layered provider in which Codex co-owns instructions and tools.
+3. Keep the current `codex exec` bridge until Codex exposes a documented raw transport that passes the capture gate.
+
 ## Acceptance scenarios
 
 1. A text-only request displays reasoning and text before turn completion.
@@ -72,7 +93,7 @@ Runtime checks complement the capture test:
 Each completed stage is committed after its own checks pass.
 
 1. `docs: record App Server provider design`
-2. `test: prove App Server prompt ownership`
-3. `feat: stream Codex App Server model events`
-4. `test: cover Harness-owned Codex tool round trips`
-5. Final package verification and installation use the resulting clean commit; profile installation and service restart do not modify this repository.
+2. `test: characterize App Server prompt ownership`
+3. Select a viable foundation before changing the provider implementation.
+
+The original implementation, integration-test, package, installation, and restart stages remain suspended because completing them under the rejected ownership claim would silently weaken the goal.

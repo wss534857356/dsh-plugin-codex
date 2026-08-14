@@ -92,7 +92,7 @@ Example override:
 
 ## Development
 
-The accepted App Server replacement is recorded in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md), with staged invariants and acceptance evidence in the [provider plan](docs/app-server-provider-plan.md). The current implementation remains the `codex exec` bridge until the prompt-ownership proof passes.
+The App Server replacement was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound model request despite all supported isolation controls. The current implementation remains the disclosed `codex exec` bridge; adopting App Server now requires an explicit decision to accept Codex as a co-owner of prompts and tools.
 
 ```sh
 pnpm run typecheck

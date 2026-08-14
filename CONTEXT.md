@@ -27,3 +27,11 @@ _Avoid_: Provider tool call
 **Client instruction layer**:
 The Codex instructions and configuration that a local integration can control before the request reaches OpenAI. OpenAI service-side policies are outside this layer.
 _Avoid_: Entire model prompt, server prompt
+
+**Layered Codex request**:
+A model request that includes host-supplied instructions or tools together with Codex-owned client instructions, context, or tools.
+_Avoid_: Harness-owned request, raw model request
+
+**Instruction source report**:
+The App Server list of discovered user or project instruction files. An empty report does not account for Codex-generated permission, environment, collaboration, or tool instructions.
+_Avoid_: Complete prompt inventory
