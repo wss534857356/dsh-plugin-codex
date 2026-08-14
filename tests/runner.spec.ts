@@ -120,7 +120,7 @@ function runner(
     runner: new CodexAppServerRunner({
       timeoutMs: 1_000,
       disposeGraceMs: 25,
-      maxStdoutBytes: 100_000,
+      maxJsonRpcLineBytes: 100_000,
       maxStderrBytes: 1_000,
       env: { CODEX_HOME: 'configured-home' },
       spawn: (candidate) => {
@@ -312,7 +312,30 @@ describe('Codex App Server runner', () => {
     expect(malformed.child.terminate).toHaveBeenCalledOnce()
   })
 
-  it('bounds the complete App Server protocol stream', async () => {
+  it('accepts a long protocol stream whose individual JSON-RPC lines stay bounded', async () => {
+    const setup = runner(standardScript((send) => {
+      for (let index = 0; index < 20; index += 1) {
+        send({ method: 'item/agentMessage/delta', params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          itemId: 'message-1',
+          delta: `${String(index)}:${'x'.repeat(256)}`,
+        } })
+      }
+      send({ method: 'turn/completed', params: {
+        threadId: 'thread-1',
+        turn: { id: 'turn-1', status: 'completed', error: null },
+      } })
+    }), { maxJsonRpcLineBytes: 512 })
+
+    const events = await collect(setup.runner, request())
+    expect(events.filter(event => (
+      event.kind === 'notification' && event.method === 'item/agentMessage/delta'
+    ))).toHaveLength(20)
+    expect(setup.child.terminate).toHaveBeenCalledOnce()
+  })
+
+  it('bounds each App Server JSON-RPC line', async () => {
     const setup = runner(standardScript((send) => {
       send({ method: 'item/agentMessage/delta', params: {
         threadId: 'thread-1',
@@ -320,7 +343,7 @@ describe('Codex App Server runner', () => {
         itemId: 'message-1',
         delta: 'x'.repeat(2_000),
       } })
-    }), { maxStdoutBytes: 512 })
+    }), { maxJsonRpcLineBytes: 512 })
 
     await expect(collect(setup.runner, request())).rejects.toMatchObject({ code: 'OUTPUT_LIMIT' })
     expect(setup.child.terminate).toHaveBeenCalledOnce()
@@ -331,7 +354,7 @@ describe('Codex App Server runner', () => {
     const instance = new CodexAppServerRunner({
       timeoutMs: 1_000,
       disposeGraceMs: 25,
-      maxStdoutBytes: 1_000,
+      maxJsonRpcLineBytes: 1_000,
       maxStderrBytes: 1_000,
       env: {},
       spawn,

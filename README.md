@@ -59,7 +59,7 @@ Later profile patch layers can replace the `llm-codex-app-server` row. A replace
 | `models` | GPT-5.6 Sol catalog entry | Advisory model metadata and reasoning choices. Unlisted safe model ids remain routable. |
 | `timeoutMs` | `300000` | Wall-clock limit for one App Server turn. |
 | `disposeGraceMs` | `3000` | Process-tree termination grace. |
-| `maxStdoutBytes` | `4194304` | Maximum App Server JSON-RPC bytes accepted for one step. |
+| `maxJsonRpcLineBytes` | `4194304` | Maximum bytes accepted for one newline-delimited App Server JSON-RPC message. Parsed messages do not count toward a cumulative stdout limit. |
 | `maxStderrBytes` | `65536` | Maximum retained diagnostic output. |
 | `maxRetries` | `0` | Harness-visible retries for transient process or provider failures. |
 | `env` | `{}` | Explicit child environment layered over Harness's scrubbed parent environment. Use this to pass `CODEX_HOME` when it is nonstandard. |
@@ -81,7 +81,7 @@ Example override:
         defaultReasoningEffort: low
     timeoutMs: 600000
     disposeGraceMs: 3000
-    maxStdoutBytes: 4194304
+    maxJsonRpcLineBytes: 4194304
     maxStderrBytes: 65536
     maxRetries: 0
     env:

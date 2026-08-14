@@ -50,7 +50,7 @@ export interface Config {
   }>
   timeoutMs?: number
   disposeGraceMs?: number
-  maxStdoutBytes?: number
+  maxJsonRpcLineBytes?: number
   maxStderrBytes?: number
   maxRetries?: number
   env?: Record<string, string>
@@ -81,7 +81,7 @@ export const Config: z<Config> = z.object({
   models: z.array(modelSchema).default(DEFAULT_MODELS),
   timeoutMs: z.number().max(2_147_483_647).default(300_000),
   disposeGraceMs: z.number().max(2_147_483_647).default(3_000),
-  maxStdoutBytes: z.number().step(1).min(1).default(4 * 1024 * 1024),
+  maxJsonRpcLineBytes: z.number().step(1).min(1).default(4 * 1024 * 1024),
   maxStderrBytes: z.number().step(1).min(1).default(64 * 1024),
   maxRetries: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(0),
   env: z.dict(z.string()).default({}),
@@ -94,7 +94,7 @@ interface ResolvedConfig {
   readonly models: readonly CodexModel[]
   readonly timeoutMs: number
   readonly disposeGraceMs: number
-  readonly maxStdoutBytes: number
+  readonly maxJsonRpcLineBytes: number
   readonly maxStderrBytes: number
   readonly maxRetries: number
   readonly env: Readonly<Record<string, string>>
@@ -108,7 +108,7 @@ function resolveConfig(config: Config): ResolvedConfig {
   const modelProvider = config.modelProvider ?? 'openai'
   const timeoutMs = config.timeoutMs ?? 300_000
   const disposeGraceMs = config.disposeGraceMs ?? 3_000
-  const maxStdoutBytes = config.maxStdoutBytes ?? 4 * 1024 * 1024
+  const maxJsonRpcLineBytes = config.maxJsonRpcLineBytes ?? 4 * 1024 * 1024
   const maxStderrBytes = config.maxStderrBytes ?? 64 * 1024
   const maxRetries = config.maxRetries ?? 0
   const env = config.env ?? {}
@@ -123,8 +123,8 @@ function resolveConfig(config: Config): ResolvedConfig {
   if (!Number.isFinite(disposeGraceMs) || disposeGraceMs <= 0 || disposeGraceMs > 2_147_483_647) {
     throw new Error('llm-codex-app-server: disposeGraceMs must be a positive finite number')
   }
-  if (!Number.isSafeInteger(maxStdoutBytes) || maxStdoutBytes <= 0) {
-    throw new Error('llm-codex-app-server: maxStdoutBytes must be a positive safe integer')
+  if (!Number.isSafeInteger(maxJsonRpcLineBytes) || maxJsonRpcLineBytes <= 0) {
+    throw new Error('llm-codex-app-server: maxJsonRpcLineBytes must be a positive safe integer')
   }
   if (!Number.isSafeInteger(maxStderrBytes) || maxStderrBytes <= 0) {
     throw new Error('llm-codex-app-server: maxStderrBytes must be a positive safe integer')
@@ -165,7 +165,7 @@ function resolveConfig(config: Config): ResolvedConfig {
     models,
     timeoutMs,
     disposeGraceMs,
-    maxStdoutBytes,
+    maxJsonRpcLineBytes,
     maxStderrBytes,
     maxRetries,
     env,
@@ -178,7 +178,7 @@ export function apply(ctx: Context, config: Config): void {
   const runner = new CodexAppServerRunner({
     timeoutMs: resolved.timeoutMs,
     disposeGraceMs: resolved.disposeGraceMs,
-    maxStdoutBytes: resolved.maxStdoutBytes,
+    maxJsonRpcLineBytes: resolved.maxJsonRpcLineBytes,
     maxStderrBytes: resolved.maxStderrBytes,
     env: resolved.env,
     spawn: spec => ctx.subprocess.spawn(spec),

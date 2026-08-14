@@ -13,5 +13,5 @@
             defaultReasoningEffort: low
         timeoutMs: 300000
         disposeGraceMs: 3000
-        maxStdoutBytes: 4194304
+        maxJsonRpcLineBytes: 4194304
         maxStderrBytes: 65536

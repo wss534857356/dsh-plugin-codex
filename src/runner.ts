@@ -87,7 +87,7 @@ export type CodexAppServerEvent =
 export interface CodexAppServerRunnerOptions {
   readonly timeoutMs: number
   readonly disposeGraceMs: number
-  readonly maxStdoutBytes: number
+  readonly maxJsonRpcLineBytes: number
   readonly maxStderrBytes: number
   readonly env: Readonly<Record<string, string>>
   readonly spawn: (spec: SubprocessSpawnSpec) => SubprocessHandle
@@ -176,13 +176,12 @@ class JsonRpcConnection {
   private readonly events = new AsyncQueue<CodexAppServerEvent>()
   private nextId = 1
   private buffer = ''
-  private stdoutBytes = 0
   private stopped = false
 
   constructor(
     private readonly input: Writable,
     private readonly output: Readable,
-    private readonly maxStdoutBytes: number,
+    private readonly maxJsonRpcLineBytes: number,
   ) {
     output.setEncoding('utf8')
     output.on('data', this.onData)
@@ -193,18 +192,28 @@ class JsonRpcConnection {
 
   private readonly onData = (chunk: string): void => {
     if (this.stopped) return
-    this.stdoutBytes += Buffer.byteLength(chunk)
-    if (this.stdoutBytes > this.maxStdoutBytes) {
-      this.fail(new LlmError('Codex App Server stdout exceeded its configured limit', 'OUTPUT_LIMIT'))
-      return
-    }
     this.buffer += chunk
     while (true) {
       const newline = this.buffer.indexOf('\n')
-      if (newline === -1) break
+      if (newline === -1) {
+        if (Buffer.byteLength(this.buffer) > this.maxJsonRpcLineBytes) {
+          this.fail(new LlmError(
+            'Codex App Server JSON-RPC line exceeded its configured limit',
+            'OUTPUT_LIMIT',
+          ))
+        }
+        return
+      }
       const line = this.buffer.slice(0, newline).replace(/\r$/u, '')
       this.buffer = this.buffer.slice(newline + 1)
       if (line.trim().length === 0) continue
+      if (Buffer.byteLength(line) > this.maxJsonRpcLineBytes) {
+        this.fail(new LlmError(
+          'Codex App Server JSON-RPC line exceeded its configured limit',
+          'OUTPUT_LIMIT',
+        ))
+        return
+      }
       try {
         this.receive(JSON.parse(line))
       } catch (error: unknown) {
@@ -530,7 +539,7 @@ export class CodexAppServerRunner implements CodexAppServerRunnerPort {
       if (child.stdin === undefined || child.stdout === undefined) {
         throw new LlmError('Codex App Server subprocess did not expose protocol pipes', 'TRANSPORT')
       }
-      connection = new JsonRpcConnection(child.stdin, child.stdout, this.options.maxStdoutBytes)
+      connection = new JsonRpcConnection(child.stdin, child.stdout, this.options.maxJsonRpcLineBytes)
       const activeConnection = connection
       void child.done.then((outcome: SubprocessOutcome) => {
         const stderr = readStderr(child!)
