@@ -22,7 +22,11 @@ interface JsonObject {
   readonly [key: string]: unknown
 }
 
-type Script = (message: JsonObject, send: (message: JsonObject) => void) => void
+type Script = (
+  message: JsonObject,
+  send: (message: JsonObject) => void,
+  sendRaw: (text: string) => void,
+) => void
 
 function object(value: unknown): JsonObject {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('expected object')
@@ -46,7 +50,7 @@ function scriptedHandle(script: Script): SubprocessHandle {
       if (newline === -1) return
       const line = input.slice(0, newline)
       input = input.slice(newline + 1)
-      if (line.trim().length !== 0) script(object(JSON.parse(line)), send)
+      if (line.trim().length !== 0) script(object(JSON.parse(line)), send, text => { stdout.write(text) })
     }
   })
   const terminate = vi.fn(() => {
@@ -150,7 +154,7 @@ describe('Codex App Server runner', () => {
 
   it('starts an ephemeral thread, injects history, streams events, and reaches quiescence', async () => {
     const messages: JsonObject[] = []
-    const setup = runner((message, send) => {
+    const setup = runner((message, send, sendRaw) => {
       messages.push(message)
       standardScript((write) => {
         write({ method: 'item/agentMessage/delta', params: {
@@ -160,7 +164,7 @@ describe('Codex App Server runner', () => {
           threadId: 'thread-1',
           turn: { id: 'turn-1', status: 'completed', error: null },
         } })
-      })(message, send)
+      })(message, send, sendRaw)
     })
 
     const events = await collect(setup.runner, request({ reasoningEffort: 'high' }))
@@ -204,7 +208,7 @@ describe('Codex App Server runner', () => {
 
   it('hands a dynamic tool request back without sending a provider-side result', async () => {
     const messages: JsonObject[] = []
-    const setup = runner((message, send) => {
+    const setup = runner((message, send, sendRaw) => {
       messages.push(message)
       standardScript((write) => {
         write({
@@ -219,7 +223,7 @@ describe('Codex App Server runner', () => {
             arguments: { path: 'a.txt' },
           },
         })
-      })(message, send)
+      })(message, send, sendRaw)
     })
 
     await expect(collect(setup.runner, request())).resolves.toEqual(expect.arrayContaining([
@@ -234,14 +238,14 @@ describe('Codex App Server runner', () => {
   })
 
   it('reports and declines a Codex-native approval without failing the turn', async () => {
-    const setup = runner((message, send) => {
+    const setup = runner((message, send, sendRaw) => {
       standardScript((write) => {
         write({
           id: 'approval-1',
           method: 'item/commandExecution/requestApproval',
           params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'command-1' },
         })
-      })(message, send)
+      })(message, send, sendRaw)
       if (message.id === 'approval-1') {
         expect(message.result).toEqual({ decision: 'decline' })
         send({ method: 'turn/completed', params: {
@@ -272,6 +276,51 @@ describe('Codex App Server runner', () => {
     const pending = collect(cancelled.runner, request({ signal: controller.signal }))
     controller.abort(new Error('stop'))
     await expect(pending).rejects.toMatchObject({ code: 'ABORTED' })
+  })
+
+  it('tears down when the stream consumer returns after the first event', async () => {
+    const setup = runner(standardScript(() => {}))
+    const iterator = setup.runner.stream(request())[Symbol.asyncIterator]()
+    await expect(iterator.next()).resolves.toMatchObject({
+      done: false,
+      value: { kind: 'thread-started', threadId: 'thread-1' },
+    })
+    await iterator.return?.()
+
+    expect(existsSync(setup.spec().cwd)).toBe(false)
+    expect(setup.child.terminate).toHaveBeenCalledOnce()
+    expect(setup.child.waitForExit).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a mismatched App Server version and malformed JSON-RPC', async () => {
+    const mismatched = runner((message, send) => {
+      if (message.method === 'initialize') {
+        send({ id: message.id, result: { userAgent: 'codex_app_server/0.148.0' } })
+      }
+    })
+    await expect(collect(mismatched.runner, request())).rejects.toMatchObject({ code: 'PROTOCOL_VERSION' })
+    expect(mismatched.child.terminate).toHaveBeenCalledOnce()
+
+    const malformed = runner((message, send, sendRaw) => {
+      standardScript(() => {})(message, send, sendRaw)
+      if (message.method === 'turn/start') sendRaw('{not-json}\n')
+    })
+    await expect(collect(malformed.runner, request())).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' })
+    expect(malformed.child.terminate).toHaveBeenCalledOnce()
+  })
+
+  it('bounds the complete App Server protocol stream', async () => {
+    const setup = runner(standardScript((send) => {
+      send({ method: 'item/agentMessage/delta', params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        itemId: 'message-1',
+        delta: 'x'.repeat(2_000),
+      } })
+    }), { maxStdoutBytes: 512 })
+
+    await expect(collect(setup.runner, request())).rejects.toMatchObject({ code: 'OUTPUT_LIMIT' })
+    expect(setup.child.terminate).toHaveBeenCalledOnce()
   })
 
   it('rejects unsafe model and provider ids before spawning', async () => {

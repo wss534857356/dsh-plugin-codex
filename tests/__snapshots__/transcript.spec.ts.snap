@@ -1,0 +1,125 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`assembled Harness transcript > keeps Codex actions distinct from Harness tool calls across a tool round trip 1`] = `
+{
+  "first": {
+    "content": [
+      {
+        "actionId": "thread-1",
+        "actionType": "thread/start",
+        "phase": "completed",
+        "snapshot": {
+          "codexOwnedPromptAndTools": true,
+          "instructionSources": [
+            {
+              "path": "C:/Users/demo/.codex/AGENTS.md",
+            },
+          ],
+          "ownership": "layered",
+          "threadId": "thread-1",
+          "userAgent": "deepseek-harness/0.147.0",
+        },
+        "type": "codex-action",
+      },
+      {
+        "text": "Need the logged file result.",
+        "type": "reasoning",
+      },
+      {
+        "actionId": "native-command-1",
+        "actionType": "commandExecution",
+        "phase": "started",
+        "snapshot": {
+          "command": "pwd",
+          "id": "native-command-1",
+          "status": "inProgress",
+          "type": "commandExecution",
+        },
+        "type": "codex-action",
+      },
+      {
+        "actionId": "native-command-1",
+        "actionType": "item/commandExecution/outputDelta",
+        "phase": "updated",
+        "snapshot": {
+          "delta": "C:/private-workdir",
+          "itemId": "native-command-1",
+          "threadId": "thread-1",
+          "turnId": "turn-1",
+        },
+        "type": "codex-action",
+      },
+      {
+        "actionId": "native-command-1",
+        "actionType": "commandExecution",
+        "phase": "completed",
+        "snapshot": {
+          "aggregatedOutput": "C:/private-workdir",
+          "command": "pwd",
+          "exitCode": 0,
+          "id": "native-command-1",
+          "status": "completed",
+          "type": "commandExecution",
+        },
+        "type": "codex-action",
+      },
+      {
+        "arguments": "{"path":"notes.txt"}",
+        "id": "call-read-1",
+        "name": "read_file",
+        "type": "tool-call",
+      },
+    ],
+    "finish": {
+      "kind": "tool-calls",
+    },
+  },
+  "second": {
+    "content": [
+      {
+        "actionId": "thread-2",
+        "actionType": "thread/start",
+        "phase": "completed",
+        "snapshot": {
+          "codexOwnedPromptAndTools": true,
+          "instructionSources": [],
+          "ownership": "layered",
+          "threadId": "thread-2",
+          "userAgent": "deepseek-harness/0.147.0",
+        },
+        "type": "codex-action",
+      },
+      {
+        "text": "The file says hello.",
+        "type": "text",
+      },
+    ],
+    "finish": {
+      "kind": "stop",
+    },
+  },
+  "secondRequestHistory": [
+    {
+      "content": [
+        {
+          "text": "Read notes.txt.",
+          "type": "input_text",
+        },
+      ],
+      "role": "user",
+      "type": "message",
+    },
+    {
+      "arguments": "{"path":"notes.txt"}",
+      "call_id": "call-read-1",
+      "name": "read_file",
+      "type": "function_call",
+    },
+    {
+      "call_id": "call-read-1",
+      "output": "hello",
+      "type": "function_call_output",
+    },
+  ],
+}
+`;

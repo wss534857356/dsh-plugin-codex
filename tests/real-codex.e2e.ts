@@ -120,6 +120,13 @@ describe('real locally authenticated Codex bridge', () => {
       `You are a deterministic integration test. Request echo_sentinel exactly once with value ${ARGUMENT_SENTINEL}.`,
     )
     expect(first.finish, JSON.stringify(first.message.content, null, 2)).toEqual({ kind: 'tool-calls' })
+    expect(first.message.content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'codex-action', actionType: 'thread/start' }),
+    ]))
+    expect(first.message.source).toMatchObject({
+      kind: 'model',
+      replayState: { kind: 'codex-app-server', version: 0 },
+    })
     const call = toolCall(first.message)
     expect(call.name).toBe(tool.name)
     expect(JSON.parse(call.arguments)).toEqual({ value: ARGUMENT_SENTINEL })

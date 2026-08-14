@@ -112,3 +112,7 @@ Each completed stage is committed after its own checks pass.
 4. `feat: stream Codex App Server model events`
 5. `test: cover Harness-owned Codex tool round trips`
 6. Final package verification and installation use the resulting clean commit; profile installation and service restart do not modify this repository.
+
+## Verification evidence
+
+The keyless wire test runs the pinned CLI against a local Responses endpoint and proves both history injection through an empty turn and the remaining Codex-owned layers. The assembled Harness snapshot fixes the transcript distinction between `codex-action` trajectory and Harness `tool-call` blocks across two model steps. The real local-OAuth test completes the same two-step dynamic-tool round trip through App Server and verifies both process trees have exited.
