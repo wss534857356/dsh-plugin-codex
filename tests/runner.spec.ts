@@ -178,7 +178,7 @@ describe('Codex App Server runner', () => {
       expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
     ]))
     expect(messages.find(message => message.method === 'initialize')).toMatchObject({
-      params: { clientInfo: { name: 'deepseek-harness', version: '0.1.3' } },
+      params: { clientInfo: { name: 'deepseek-harness', version: '0.1.4' } },
     })
     expect(messages.find(message => message.method === 'thread/start')).toMatchObject({
       params: {
