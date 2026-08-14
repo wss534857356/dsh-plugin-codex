@@ -109,8 +109,9 @@ function normalizedFingerprintValue(value: JsonValue, loose: boolean): JsonValue
   if (Array.isArray(value)) return value.map(entry => normalizedFingerprintValue(entry, loose))
   if (value === null || typeof value !== 'object') return value
   return Object.fromEntries(Object.keys(value).sort().flatMap((key) => {
-    if (FINGERPRINT_IGNORED_KEYS.has(key) || (loose && key === 'id')) return []
-    return [[key, normalizedFingerprintValue(value[key]!, loose)]]
+    const entry = value[key]!
+    if (entry === null || FINGERPRINT_IGNORED_KEYS.has(key) || (loose && key === 'id')) return []
+    return [[key, normalizedFingerprintValue(entry, loose)]]
   }))
 }
 
@@ -139,6 +140,48 @@ function responseItem(value: unknown, label: string): ResponseItem {
     throw new LlmError(`Codex App Server returned invalid ${label}`, 'MALFORMED_RESPONSE')
   }
   return candidate as ResponseItem
+}
+
+function responseItemIdentity(value: JsonValue): string | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || typeof value.type !== 'string') {
+    return undefined
+  }
+  if (typeof value.id === 'string' && value.id.length > 0) {
+    return JSON.stringify([value.type, 'id', value.id])
+  }
+  if (typeof value.call_id === 'string' && value.call_id.length > 0) {
+    return JSON.stringify([value.type, 'call_id', value.call_id])
+  }
+  return undefined
+}
+
+type HistoryItemOrigin = 'harness' | 'provider'
+
+interface HistoryIdentitySlot {
+  readonly index: number
+  readonly origin: HistoryItemOrigin
+}
+
+function appendHistoryItem(
+  history: JsonValue[],
+  identities: Map<string, HistoryIdentitySlot>,
+  item: JsonValue,
+  origin: HistoryItemOrigin,
+): void {
+  const identity = responseItemIdentity(item)
+  if (identity === undefined) {
+    history.push(item)
+    return
+  }
+  const previous = identities.get(identity)
+  if (previous === undefined) {
+    identities.set(identity, { index: history.length, origin })
+    history.push(item)
+    return
+  }
+  if (previous.origin === 'harness' && origin === 'provider') return
+  history[previous.index] = item
+  identities.set(identity, { index: previous.index, origin })
 }
 
 function rawItemDisposition(value: ResponseItem): 'context' | 'replay' | 'trajectory' {
@@ -199,6 +242,10 @@ function encodedHistoryMessage(
 /** Reconstruct the App Server-visible conversation exclusively from the Harness request. */
 export function appServerHistory(options: GenerateOptions): JsonValue[] {
   const history: JsonValue[] = []
+  const identities = new Map<string, HistoryIdentitySlot>()
+  const append = (item: JsonValue, origin: HistoryItemOrigin): void => {
+    appendHistoryItem(history, identities, item, origin)
+  }
   for (const message of options.messages) {
     const replay = message.role === 'assistant'
       && message.source.kind === 'model'
@@ -206,13 +253,13 @@ export function appServerHistory(options: GenerateOptions): JsonValue[] {
       ? replayItems(message.source.replayState)
       : undefined
     if (replay !== undefined) {
-      history.push(...replay)
+      for (const item of replay) append(item, 'provider')
       continue
     }
     let text: string[] = []
     const flushText = (): void => {
       if (text.length === 0) return
-      history.push(encodedHistoryMessage(message.role, text.join('\n')))
+      append(encodedHistoryMessage(message.role, text.join('\n')), 'harness')
       text = []
     }
     for (const block of message.content) {
@@ -228,20 +275,20 @@ export function appServerHistory(options: GenerateOptions): JsonValue[] {
           break
         case 'tool-call':
           flushText()
-          history.push({
+          append({
             type: 'function_call',
             call_id: String(block.id),
             name: block.name,
             arguments: argumentsJson(block.arguments, `arguments for ${block.name}`),
-          })
+          }, 'harness')
           break
         case 'tool-result':
           flushText()
-          history.push({
+          append({
             type: 'function_call_output',
             call_id: String(block.toolCallId),
             output: resultOutput(block),
-          })
+          }, 'harness')
           break
         case 'image':
           throw new LlmError('Codex App Server provider supports text input only', 'UNSUPPORTED_CONTENT')

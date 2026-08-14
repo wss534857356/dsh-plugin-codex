@@ -108,6 +108,113 @@ describe('App Server protocol translation', () => {
     expect(history).toEqual([raw])
   })
 
+  it('coalesces cumulative replay snapshots while preserving Harness results', () => {
+    const callId = CallId('call-1')
+    const firstReasoning = {
+      type: 'reasoning',
+      id: 'reasoning-1',
+      summary: [],
+      content: null,
+      encrypted_content: 'first-encoding',
+    }
+    const latestReasoning = {
+      type: 'reasoning',
+      id: 'reasoning-1',
+      summary: [],
+      encrypted_content: 'latest-encoding',
+    }
+    const call = {
+      type: 'function_call',
+      call_id: String(callId),
+      name: 'read_file',
+      arguments: '{"path":"a.txt"}',
+    }
+    const secondReasoning = {
+      type: 'reasoning',
+      id: 'reasoning-2',
+      summary: [],
+      encrypted_content: 'second',
+    }
+    const source = (items: Record<string, unknown>[]) => ({
+      kind: 'model' as const,
+      provider: 'codex-local',
+      model: 'gpt-5.6-sol',
+      replayState: { kind: 'codex-app-server', version: 1, items, contextItems: [] },
+    })
+
+    const history = appServerHistory(options({
+      messages: [
+        {
+          id: MessageId('assistant-1'),
+          role: 'assistant',
+          source: source([firstReasoning, call]),
+          content: [{ type: 'tool-call', id: callId, name: 'read_file', arguments: call.arguments }],
+        },
+        {
+          id: MessageId('tool-1'),
+          role: 'user',
+          source: { kind: 'tool', callId },
+          content: [{
+            type: 'tool-result',
+            toolCallId: callId,
+            content: [{ type: 'text', text: 'Harness result' }],
+          }],
+        },
+        {
+          id: MessageId('assistant-2'),
+          role: 'assistant',
+          source: source([
+            latestReasoning,
+            call,
+            { type: 'function_call_output', call_id: String(callId), output: 'provider echo' },
+            secondReasoning,
+          ]),
+          content: [{ type: 'text', text: 'done' }],
+        },
+      ],
+    }))
+
+    expect(history).toEqual([
+      latestReasoning,
+      call,
+      { type: 'function_call_output', call_id: String(callId), output: 'Harness result' },
+      secondReasoning,
+    ])
+  })
+
+  it('ignores null-versus-absent changes in injected raw item echoes', () => {
+    const injected = {
+      type: 'reasoning',
+      id: 'reasoning-1',
+      summary: [],
+      content: null,
+      encrypted_content: 'opaque',
+    }
+    const mapper = new AppServerEventMapper([injected])
+    const echoed: CodexAppServerEvent = {
+      kind: 'notification',
+      method: 'rawResponseItem/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        item: {
+          type: 'reasoning',
+          id: 'reasoning-1',
+          summary: [],
+          encrypted_content: 'opaque',
+        },
+      },
+    }
+
+    expect(mapper.accept(echoed)).toEqual([])
+    expect(mapper.replayState()).toEqual({
+      kind: 'codex-app-server',
+      version: 1,
+      items: [],
+      contextItems: [],
+    })
+  })
+
   it('separates injected history, Codex context, and outputs across raw responses', () => {
     const injected = {
       type: 'message',
