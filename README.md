@@ -92,6 +92,8 @@ Example override:
 
 ## Development
 
+The accepted App Server replacement is recorded in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md), with staged invariants and acceptance evidence in the [provider plan](docs/app-server-provider-plan.md). The current implementation remains the `codex exec` bridge until the prompt-ownership proof passes.
+
 ```sh
 pnpm run typecheck
 pnpm run test

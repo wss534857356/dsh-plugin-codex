@@ -1,0 +1,78 @@
+# App Server provider plan
+
+## Goal
+
+Turn the locally authenticated Codex CLI into a Harness-owned main-model provider. Harness must own the client instruction layer, durable conversation, tool catalog, tool execution, permissions, and session presentation; the Codex process must only authenticate, carry requests, and stream model events.
+
+The proof boundary is the decoded request emitted by the pinned Codex client. The plugin cannot replace or inspect OpenAI service-side policies and does not claim to do so.
+
+## Required invariants
+
+1. The outbound base instructions equal the Harness `GenerateOptions.system` string exactly.
+2. No user Codex configuration, project instruction file, collaboration mode, personality, skill, plugin, MCP server, or built-in Codex instruction contributes client-controlled behavioral text.
+3. Every history item sent to Codex is reconstructed from logged Harness messages.
+4. The model-facing tool catalog equals the Harness `GenerateOptions.tools` catalog, and only the Harness agent loop executes requested tools.
+5. Reasoning summaries, assistant text, tool calls, usage, cancellation, and failures are converted to Harness stream events as they occur.
+6. A Codex-native action is a protocol violation. The request fails closed instead of allowing an unlogged command, file change, search, or MCP call.
+7. A request and its Codex process tree leave no provider thread, temporary workspace, or child process after completion, handoff, cancellation, timeout, or failure.
+
+## Request lifecycle
+
+Each Harness model request gets one managed App Server subprocess and one ephemeral thread. Keeping requests stateless makes the Harness session log authoritative and prevents provider history from diverging from replayed history.
+
+1. Start the pinned Codex App Server with user configuration effects overridden, native action features disabled, analytics disabled, and a private empty working directory.
+2. Complete the App Server initialization handshake with the experimental API capability required by dynamic tools.
+3. Start an ephemeral thread with:
+   - `baseInstructions` set to the exact Harness system prompt;
+   - `developerInstructions` set to the empty string;
+   - `personality` set to `none`;
+   - no collaboration mode;
+   - dynamic tools derived exactly from Harness tool schemas;
+   - read-only, network-denied, never-approve execution policy as defense in depth.
+4. Reject a thread whose returned `instructionSources` is non-empty.
+5. Inject prior user, assistant, tool-call, and tool-result history as native protocol items derived from the Harness request, then start the turn with the current user content.
+6. Map reasoning summary and assistant-message deltas directly to indexed Harness blocks.
+7. On a dynamic tool request, emit validated Harness tool-call blocks, end the model step with `tool-calls`, interrupt the Codex turn, and tear down the process. Harness executes and logs the tools; the next request reconstructs their results from the session.
+8. On successful turn completion, emit usage followed by the terminal finish chunk and tear down the process.
+
+The dynamic-tool handoff is a phase gate. The proof must show that a pending App Server server request can be surfaced and interrupted without executing a tool or leaking a process. If the pinned protocol cannot satisfy that behavior, the change requires a new interactive-provider capability in Harness rather than an adapter-side tool executor.
+
+## Prompt ownership proof
+
+A keyless integration test runs the official pinned App Server against a local fake Responses-compatible endpoint and captures the decoded outbound request. The test uses hostile inputs so absence is meaningful:
+
+- a Codex config developer instruction containing a unique sentinel;
+- a project `AGENTS.md` containing a different sentinel;
+- a non-default personality or collaboration instruction sentinel;
+- a configured native MCP tool sentinel;
+- a Harness system prompt and Harness tool with their own sentinels.
+
+The test requires exact equality for outbound instructions, exact equality for the tool catalog, native role-preserving history, and absence of every hostile sentinel. This test is the prompt-ownership acceptance gate; a model response is not proof because instruction following is nondeterministic.
+
+Runtime checks complement the capture test:
+
+- `instructionSources` must be empty;
+- every dynamic call must name an offered Harness tool and carry object-valued JSON arguments;
+- only the documented reasoning, assistant-message, dynamic-tool, usage, and lifecycle events are accepted;
+- native action items fail with a stable protocol error;
+- the installed Codex version and generated protocol schema must match the pinned baseline.
+
+## Acceptance scenarios
+
+1. A text-only request displays reasoning and text before turn completion.
+2. A file-context request displays a Harness read/search call, its logged result, and the final answer in order.
+3. Hostile Codex configuration and project instructions do not appear in the captured outbound request.
+4. An attempted native Codex action fails without modifying the workspace or reaching the network.
+5. Abort, timeout, malformed JSON-RPC, App Server exit, and tool handoff leave no process tree or temporary workspace.
+6. A real local-OAuth Harness run completes a two-step tool round trip and produces a keyless replayable session snapshot.
+7. The packed tarball passes isolated profile installation and the actual web profile renders the same trajectory after restart.
+
+## Delivery stages
+
+Each completed stage is committed after its own checks pass.
+
+1. `docs: record App Server provider design`
+2. `test: prove App Server prompt ownership`
+3. `feat: stream Codex App Server model events`
+4. `test: cover Harness-owned Codex tool round trips`
+5. Final package verification and installation use the resulting clean commit; profile installation and service restart do not modify this repository.
