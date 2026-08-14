@@ -92,7 +92,7 @@ Example override:
 
 ## Development
 
-The App Server replacement was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound model request despite all supported isolation controls. The current implementation remains the disclosed `codex exec` bridge; adopting App Server now requires an explicit decision to accept Codex as a co-owner of prompts and tools.
+The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound model request despite all supported isolation controls. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts a layered App Server provider: Harness owns history, dynamic-tool execution, logging, and trajectory while Codex remains a disclosed co-owner of model-visible instructions and tools.
 
 ```sh
 pnpm run typecheck

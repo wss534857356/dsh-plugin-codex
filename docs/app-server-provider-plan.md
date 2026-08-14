@@ -78,6 +78,20 @@ No implementation stage follows automatically. The product decision must choose 
 2. Preserve local Codex login by accepting a layered provider in which Codex co-owns instructions and tools.
 3. Keep the current `codex exec` bridge until Codex exposes a documented raw transport that passes the capture gate.
 
+## Selected foundation
+
+The product decision selects option 2: preserve the local Codex login and implement a layered App Server provider. ADR 0002 records the accepted ownership split.
+
+The prompt-ownership invariants remain documented as disproven properties rather than being weakened or relabeled. Implementation acceptance now requires:
+
+1. Harness history and the current user input are reconstructed only from the Harness request.
+2. Harness tools are declared as App Server dynamic tools and only the Harness agent loop executes them.
+3. Codex-added prompt and tool layers remain disclosed in documentation and covered by the wire characterization test.
+4. Any Codex-native action fails the request before it can be represented as a successful Harness tool call.
+5. Reasoning, text, Harness dynamic-tool requests, usage, cancellation, and failures are emitted as live Harness stream events.
+6. Every model-visible Harness input and every provider output needed for replay is present in the Harness session log.
+7. App Server processes, ephemeral threads, and temporary workspaces are settled after every terminal path.
+
 ## Acceptance scenarios
 
 1. A text-only request displays reasoning and text before turn completion.
@@ -94,6 +108,7 @@ Each completed stage is committed after its own checks pass.
 
 1. `docs: record App Server provider design`
 2. `test: characterize App Server prompt ownership`
-3. Select a viable foundation before changing the provider implementation.
-
-The original implementation, integration-test, package, installation, and restart stages remain suspended because completing them under the rejected ownership claim would silently weaken the goal.
+3. `docs: accept layered App Server ownership`
+4. `feat: stream Codex App Server model events`
+5. `test: cover Harness-owned Codex tool round trips`
+6. Final package verification and installation use the resulting clean commit; profile installation and service restart do not modify this repository.

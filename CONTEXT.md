@@ -32,6 +32,10 @@ _Avoid_: Entire model prompt, server prompt
 A model request that includes host-supplied instructions or tools together with Codex-owned client instructions, context, or tools.
 _Avoid_: Harness-owned request, raw model request
 
+**Harness control ownership**:
+Harness authority over durable history, Harness tool execution, session logging, and user-visible trajectory without claiming exclusive ownership of the model-visible prompt or tool catalog.
+_Avoid_: Prompt ownership, raw transport
+
 **Instruction source report**:
 The App Server list of discovered user or project instruction files. An empty report does not account for Codex-generated permission, environment, collaboration, or tool instructions.
 _Avoid_: Complete prompt inventory
