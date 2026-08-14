@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
-import * as CodexExec from '../src/index.ts'
+import * as CodexAppServer from '../src/index.ts'
 
 const contexts: Context[] = []
 
@@ -21,7 +21,7 @@ async function context(): Promise<Context> {
 describe('plugin composition', () => {
   it('materializes the default model catalog through Cordis config parsing', async () => {
     const ctx = await context()
-    await ctx.plugin(CodexExec, {})
+    await ctx.plugin(CodexAppServer, {})
 
     expect(ctx.llm.listProviders()).toContainEqual({
       id: 'codex-local',
@@ -39,6 +39,6 @@ describe('plugin composition', () => {
 
   it('rejects an explicitly empty model catalog', async () => {
     const ctx = await context()
-    await expect(ctx.plugin(CodexExec, { models: [] })).rejects.toThrow('models must not be empty')
+    await expect(ctx.plugin(CodexAppServer, { models: [] })).rejects.toThrow('models must not be empty')
   })
 })

@@ -1,7 +1,7 @@
 {
-  "name": "dsh-llm-codex-exec",
+  "name": "dsh-llm-codex-app-server",
   "version": "0.1.0",
-  "description": "DeepSeek Harness LLM provider backed by the locally authenticated Codex CLI",
+  "description": "DeepSeek Harness LLM provider backed by the locally authenticated Codex App Server",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

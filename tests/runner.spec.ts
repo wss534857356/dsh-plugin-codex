@@ -1,3 +1,4 @@
+import { PassThrough } from 'node:stream'
 import { existsSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type {
@@ -5,161 +6,288 @@ import type {
   SubprocessOutcome,
   SubprocessSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
-import { CodexRunner, codexArgv, codexCliEntry } from '../src/runner.ts'
+import {
+  CODEX_APP_SERVER_VERSION,
+  CodexAppServerRunner,
+  codexAppServerArgv,
+  codexCliEntry,
+} from '../src/runner.ts'
+import type {
+  CodexAppServerEvent,
+  CodexAppServerRequest,
+  CodexAppServerRunnerOptions,
+} from '../src/runner.ts'
 
-function handle(
-  stdout = 'stdout',
-  stderr = 'stderr',
-  done: Promise<SubprocessOutcome> = Promise.resolve({ exitCode: 0, signal: null }),
-  waitForExit: SubprocessHandle['waitForExit'] = vi.fn(async () => true),
-): SubprocessHandle {
+interface JsonObject {
+  readonly [key: string]: unknown
+}
+
+type Script = (message: JsonObject, send: (message: JsonObject) => void) => void
+
+function object(value: unknown): JsonObject {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('expected object')
+  return value as JsonObject
+}
+
+function scriptedHandle(script: Script): SubprocessHandle {
+  const stdin = new PassThrough()
+  const stdout = new PassThrough()
+  const outcome = Promise.withResolvers<SubprocessOutcome>()
+  let input = ''
+  let stopped = false
+  const send = (message: JsonObject): void => {
+    stdout.write(`${JSON.stringify(message)}\n`)
+  }
+  stdin.setEncoding('utf8')
+  stdin.on('data', (chunk: string) => {
+    input += chunk
+    while (true) {
+      const newline = input.indexOf('\n')
+      if (newline === -1) return
+      const line = input.slice(0, newline)
+      input = input.slice(newline + 1)
+      if (line.trim().length !== 0) script(object(JSON.parse(line)), send)
+    }
+  })
+  const terminate = vi.fn(() => {
+    if (stopped) return
+    stopped = true
+    stdout.end()
+    outcome.resolve({ exitCode: 0, signal: null })
+  })
   return {
     pid: 123,
-    stdin: undefined,
-    stdout: undefined,
+    stdin,
+    stdout,
     stderr: undefined,
     collected: {
-      stdout: { readFrom: () => ({ text: stdout, nextOffset: stdout.length, lossy: false }) },
-      stderr: { readFrom: () => ({ text: stderr, nextOffset: stderr.length, lossy: false }) },
+      stderr: { readFrom: () => ({ text: '', nextOffset: 0, lossy: false }) },
     },
-    done,
-    terminate: vi.fn(),
-    waitForExit,
+    done: outcome.promise,
+    terminate,
+    waitForExit: vi.fn(async () => true),
   }
 }
 
-describe('Codex process runner', () => {
-  it('uses the pinned CLI entry and fixed non-shell policy', () => {
-    expect(existsSync(codexCliEntry())).toBe(true)
-    const argv = codexArgv({ model: 'gpt-5.6-sol', reasoningEffort: 'high' })
-    expect(argv.slice(0, 3)).toEqual([process.execPath, codexCliEntry(), 'exec'])
-    expect(argv).toContain('--json')
-    expect(argv).toContain('--ephemeral')
-    expect(argv).toContain('--ignore-user-config')
-    expect(argv).toContain('--ignore-rules')
-    expect(argv).toContain('--strict-config')
-    expect(argv).toContain('read-only')
-    expect(argv).toContain('approval_policy="never"')
-    expect(argv).toContain('check_for_update_on_startup=false')
-    expect(argv).toContain('analytics.enabled=false')
-    expect(argv).toContain('model_reasoning_effort="high"')
-    expect(argv.at(-1)).toBe('-')
-    expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox')
-  })
+function standardScript(afterTurn: (send: (message: JsonObject) => void) => void): Script {
+  return (message, send) => {
+    if (message.method === 'initialize') {
+      send({ id: message.id, result: { userAgent: `codex_app_server/${CODEX_APP_SERVER_VERSION}` } })
+    } else if (message.method === 'thread/start') {
+      send({
+        id: message.id,
+        result: {
+          thread: { id: 'thread-1' },
+          instructionSources: [{ path: 'C:/Users/test/.codex/AGENTS.md' }],
+        },
+      })
+    } else if (message.method === 'thread/inject_items') {
+      send({ id: message.id, result: {} })
+    } else if (message.method === 'turn/start') {
+      send({ id: message.id, result: { turn: { id: 'turn-1' } } })
+      afterTurn(send)
+    }
+  }
+}
 
-  it.each([
-    { model: '--dangerously-bypass-approvals-and-sandbox' },
-    { model: 'gpt-5.6-sol', reasoningEffort: '--config' },
-  ])('rejects an identifier that the CLI could parse as another option %#', (request) => {
-    expect(() => codexArgv(request)).toThrowError(expect.objectContaining({
-      code: request.model.startsWith('--') ? 'INVALID_MODEL' : 'UNSUPPORTED_REASONING_EFFORT',
-    }))
-  })
+function request(overrides: Partial<CodexAppServerRequest> = {}): CodexAppServerRequest {
+  return {
+    model: 'gpt-5.6-sol',
+    modelProvider: 'openai',
+    system: 'Harness system',
+    history: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
+    dynamicTools: [],
+    ...overrides,
+  }
+}
 
-  it('spawns in a private temporary directory and reaches process-tree quiescence', async () => {
-    const child = handle('events', 'diagnostic')
-    let spec: SubprocessSpawnSpec | undefined
-    const runner = new CodexRunner({
+function runner(
+  script: Script,
+  overrides: Partial<CodexAppServerRunnerOptions> = {},
+): { runner: CodexAppServerRunner; child: SubprocessHandle; spec: () => SubprocessSpawnSpec } {
+  const child = scriptedHandle(script)
+  let spawned: SubprocessSpawnSpec | undefined
+  return {
+    child,
+    spec: () => {
+      if (spawned === undefined) throw new Error('process was not spawned')
+      return spawned
+    },
+    runner: new CodexAppServerRunner({
       timeoutMs: 1_000,
       disposeGraceMs: 25,
-      maxStdoutBytes: 100,
-      maxStderrBytes: 50,
+      maxStdoutBytes: 100_000,
+      maxStderrBytes: 1_000,
       env: { CODEX_HOME: 'configured-home' },
-      spawn: candidate => {
-        spec = candidate
+      spawn: (candidate) => {
+        spawned = candidate
         expect(existsSync(candidate.cwd)).toBe(true)
         return child
       },
+      ...overrides,
+    }),
+  }
+}
+
+async function collect(instance: CodexAppServerRunner, input: CodexAppServerRequest): Promise<CodexAppServerEvent[]> {
+  const events: CodexAppServerEvent[] = []
+  for await (const event of instance.stream(input)) events.push(event)
+  return events
+}
+
+describe('Codex App Server runner', () => {
+  it('uses the pinned CLI entry and fixed non-shell policy', () => {
+    expect(existsSync(codexCliEntry())).toBe(true)
+    const argv = codexAppServerArgv()
+    expect(argv.slice(0, 3)).toEqual([process.execPath, codexCliEntry(), 'app-server'])
+    expect(argv).toContain('--stdio')
+    expect(argv).toContain('--strict-config')
+    expect(argv).toContain('check_for_update_on_startup=false')
+    expect(argv).toContain('analytics.enabled=false')
+    expect(argv).toContain('web_search="disabled"')
+    expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+  })
+
+  it('starts an ephemeral thread, injects history, streams events, and reaches quiescence', async () => {
+    const messages: JsonObject[] = []
+    const setup = runner((message, send) => {
+      messages.push(message)
+      standardScript((write) => {
+        write({ method: 'item/agentMessage/delta', params: {
+          threadId: 'thread-1', turnId: 'turn-1', itemId: 'message-1', delta: 'hello',
+        } })
+        write({ method: 'turn/completed', params: {
+          threadId: 'thread-1',
+          turn: { id: 'turn-1', status: 'completed', error: null },
+        } })
+      })(message, send)
     })
-    await expect(runner.run({ model: 'gpt-5.6-sol', prompt: 'prompt' })).resolves.toEqual({
-      stdout: 'events',
-      stderr: 'diagnostic',
-      exitCode: 0,
-      signal: null,
+
+    const events = await collect(setup.runner, request({ reasoningEffort: 'high' }))
+    expect(events[0]).toMatchObject({
+      kind: 'thread-started',
+      threadId: 'thread-1',
+      instructionSources: [{ path: 'C:/Users/test/.codex/AGENTS.md' }],
     })
-    expect(spec).toMatchObject({
-      stdio: {
-        stdin: { data: 'prompt' },
-        stdout: { maxBytes: 100 },
-        stderr: { maxBytes: 50 },
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'notification', method: 'item/agentMessage/delta' }),
+      expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
+    ]))
+    expect(messages.find(message => message.method === 'thread/start')).toMatchObject({
+      params: {
+        approvalPolicy: 'never',
+        sandbox: 'read-only',
+        baseInstructions: 'Harness system',
+        developerInstructions: '',
+        dynamicTools: [],
+        ephemeral: true,
+        experimentalRawEvents: true,
       },
-      graceMs: 25,
+    })
+    expect(messages.find(message => message.method === 'thread/inject_items')).toMatchObject({
+      params: { threadId: 'thread-1', items: request().history },
+    })
+    expect(messages.find(message => message.method === 'turn/start')).toMatchObject({
+      params: { threadId: 'thread-1', input: [], effort: 'high' },
+    })
+    expect(setup.spec()).toMatchObject({
+      stdio: { stdin: 'pipe', stdout: 'pipe', stderr: { maxBytes: 1_000 } },
       env: {
         CODEX_HOME: 'configured-home',
         CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'deepseek-harness',
       },
     })
-    expect(existsSync(spec!.cwd)).toBe(false)
-    expect(child.terminate).toHaveBeenCalledOnce()
-    expect(child.waitForExit).toHaveBeenCalledOnce()
+    expect(existsSync(setup.spec().cwd)).toBe(false)
+    expect(setup.child.terminate).toHaveBeenCalledOnce()
+    expect(setup.child.waitForExit).toHaveBeenCalledOnce()
+  })
+
+  it('hands a dynamic tool request back without sending a provider-side result', async () => {
+    const messages: JsonObject[] = []
+    const setup = runner((message, send) => {
+      messages.push(message)
+      standardScript((write) => {
+        write({
+          id: 'server-call-1',
+          method: 'item/tool/call',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            callId: 'call-1',
+            namespace: null,
+            tool: 'read_file',
+            arguments: { path: 'a.txt' },
+          },
+        })
+      })(message, send)
+    })
+
+    await expect(collect(setup.runner, request())).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'server-request',
+        id: 'server-call-1',
+        method: 'item/tool/call',
+      }),
+    ]))
+    expect(messages.some(message => message.id === 'server-call-1')).toBe(false)
+    expect(setup.child.terminate).toHaveBeenCalledOnce()
+  })
+
+  it('reports and declines a Codex-native approval without failing the turn', async () => {
+    const setup = runner((message, send) => {
+      standardScript((write) => {
+        write({
+          id: 'approval-1',
+          method: 'item/commandExecution/requestApproval',
+          params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'command-1' },
+        })
+      })(message, send)
+      if (message.id === 'approval-1') {
+        expect(message.result).toEqual({ decision: 'decline' })
+        send({ method: 'turn/completed', params: {
+          threadId: 'thread-1',
+          turn: { id: 'turn-1', status: 'completed', error: null },
+        } })
+      }
+    })
+
+    const events = await collect(setup.runner, request())
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'server-request',
+        method: 'item/commandExecution/requestApproval',
+        resolution: 'declined',
+      }),
+      expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
+    ]))
   })
 
   it('classifies deadline and caller cancellation separately', async () => {
-    const run = async (timeoutMs: number, signal?: AbortSignal) => {
-      let resolveDone!: (outcome: SubprocessOutcome) => void
-      const done = new Promise<SubprocessOutcome>(resolve => { resolveDone = resolve })
-      const runner = new CodexRunner({
-        timeoutMs,
-        disposeGraceMs: 10,
-        maxStdoutBytes: 100,
-        maxStderrBytes: 100,
-        env: {},
-        spawn: (spec) => {
-          const settle = (): void => {
-            resolveDone({ exitCode: null, signal: 'SIGTERM' })
-          }
-          if (spec.signal?.aborted) settle()
-          else spec.signal?.addEventListener('abort', settle, { once: true })
-          return handle('', '', done)
-        },
-      })
-      return runner.run({ model: 'gpt-5.6-sol', prompt: 'prompt', ...(signal === undefined ? {} : { signal }) })
-    }
-    await expect(run(5)).rejects.toMatchObject({ code: 'TIMEOUT' })
+    const hanging = (): Script => standardScript(() => {})
+    const timed = runner(hanging(), { timeoutMs: 5 })
+    await expect(collect(timed.runner, request())).rejects.toMatchObject({ code: 'TIMEOUT' })
+
     const controller = new AbortController()
-    const pending = run(1_000, controller.signal)
+    const cancelled = runner(hanging())
+    const pending = collect(cancelled.runner, request({ signal: controller.signal }))
     controller.abort(new Error('stop'))
     await expect(pending).rejects.toMatchObject({ code: 'ABORTED' })
   })
 
-  it('reports cleanup failure without hiding the primary failure code', async () => {
-    const cleanupFailure = new Error('process-tree inspection failed')
-    let resolveDone!: (outcome: SubprocessOutcome) => void
-    const done = new Promise<SubprocessOutcome>(resolve => { resolveDone = resolve })
-    const runner = new CodexRunner({
-      timeoutMs: 5,
-      disposeGraceMs: 10,
-      maxStdoutBytes: 100,
-      maxStderrBytes: 100,
-      env: {},
-      spawn: (spec) => {
-        spec.signal?.addEventListener('abort', () => {
-          resolveDone({ exitCode: null, signal: 'SIGTERM' })
-        }, { once: true })
-        return handle('', '', done, vi.fn(async () => { throw cleanupFailure }))
-      },
-    })
-
-    await expect(runner.run({ model: 'gpt-5.6-sol', prompt: 'prompt' })).rejects.toMatchObject({
-      code: 'TIMEOUT',
-      message: expect.stringContaining('process-tree inspection failed'),
-      cause: expect.any(AggregateError),
-    })
-  })
-
-  it('classifies cleanup-only failure as transport failure', async () => {
-    const runner = new CodexRunner({
+  it('rejects unsafe model and provider ids before spawning', async () => {
+    const spawn = vi.fn(() => scriptedHandle(() => {}))
+    const instance = new CodexAppServerRunner({
       timeoutMs: 1_000,
-      disposeGraceMs: 10,
-      maxStdoutBytes: 100,
-      maxStderrBytes: 100,
+      disposeGraceMs: 25,
+      maxStdoutBytes: 1_000,
+      maxStderrBytes: 1_000,
       env: {},
-      spawn: () => handle('ok', '', undefined, vi.fn(async () => false)),
+      spawn,
     })
-
-    await expect(runner.run({ model: 'gpt-5.6-sol', prompt: 'prompt' })).rejects.toMatchObject({
-      code: 'TRANSPORT',
-      message: expect.stringContaining('did not reach quiescence'),
+    await expect(collect(instance, request({ model: '--config' }))).rejects.toMatchObject({ code: 'INVALID_MODEL' })
+    await expect(collect(instance, request({ modelProvider: '--provider' }))).rejects.toMatchObject({
+      code: 'INVALID_PROVIDER',
     })
+    expect(spawn).not.toHaveBeenCalled()
   })
 })

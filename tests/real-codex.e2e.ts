@@ -15,7 +15,7 @@ import type {
 } from '@deepseek-ai/dsh-llm'
 import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
-import * as CodexExec from '../src/index.ts'
+import * as CodexAppServer from '../src/index.ts'
 
 const PROVIDER = 'codex-local'
 const MODEL = 'gpt-5.6-sol'
@@ -57,7 +57,12 @@ async function assemble(
   for await (const chunk of prepared.stream(request)) assembler.push(chunk)
   const finish = finishOf(assembler.finish)
   return {
-    message: assembler.message({ kind: 'model', provider: PROVIDER, model: MODEL }),
+    message: assembler.message({
+      kind: 'model',
+      provider: PROVIDER,
+      model: MODEL,
+      replayState: assembler.replayState,
+    }),
     finish,
   }
 }
@@ -70,10 +75,11 @@ function finishOf(finish: FinishReason): FinishReason {
 }
 
 function toolCall(message: Message): Extract<Message['content'][number], { type: 'tool-call' }> {
-  expect(message.content).toHaveLength(1)
-  const block = message.content[0]
-  if (block?.type !== 'tool-call') throw new Error(`expected one tool call, received ${JSON.stringify(block)}`)
-  return block
+  const calls = message.content.filter(
+    (block): block is Extract<Message['content'][number], { type: 'tool-call' }> => block.type === 'tool-call',
+  )
+  expect(calls).toHaveLength(1)
+  return calls[0]!
 }
 
 function responseText(message: Message): string {
@@ -97,7 +103,7 @@ describe('real locally authenticated Codex bridge', () => {
       handles.push(handle)
       return handle
     })
-    await ctx.plugin(CodexExec, { timeoutMs: 600_000, disposeGraceMs: 3_000 })
+    await ctx.plugin(CodexAppServer, { timeoutMs: 600_000, disposeGraceMs: 3_000 })
 
     expect(ctx.llm.listProviders()).toContainEqual({ id: PROVIDER, name: 'Codex (local login)' })
 
@@ -113,7 +119,7 @@ describe('real locally authenticated Codex bridge', () => {
       [user],
       `You are a deterministic integration test. Request echo_sentinel exactly once with value ${ARGUMENT_SENTINEL}.`,
     )
-    expect(first.finish).toEqual({ kind: 'tool-calls' })
+    expect(first.finish, JSON.stringify(first.message.content, null, 2)).toEqual({ kind: 'tool-calls' })
     const call = toolCall(first.message)
     expect(call.name).toBe(tool.name)
     expect(JSON.parse(call.arguments)).toEqual({ value: ARGUMENT_SENTINEL })

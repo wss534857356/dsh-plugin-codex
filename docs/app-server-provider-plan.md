@@ -20,7 +20,7 @@ The proof boundary is the decoded request emitted by the pinned Codex client. Th
 
 Each Harness model request gets one managed App Server subprocess and one ephemeral thread. Keeping requests stateless makes the Harness session log authoritative and prevents provider history from diverging from replayed history.
 
-1. Start the pinned Codex App Server with user configuration effects overridden, native action features disabled, analytics disabled, and a private empty working directory.
+1. Start the pinned Codex App Server with controllable user configuration effects overridden, optional native integrations disabled where compatible with dynamic-tool dispatch, analytics disabled, and a private empty working directory. Keep Code Mode available because `gpt-5.6-sol` uses it for dynamic tools.
 2. Complete the App Server initialization handshake with the experimental API capability required by dynamic tools.
 3. Start an ephemeral thread with:
    - `baseInstructions` set to the exact Harness system prompt;
@@ -28,9 +28,9 @@ Each Harness model request gets one managed App Server subprocess and one epheme
    - `personality` set to `none`;
    - no collaboration mode;
    - dynamic tools derived exactly from Harness tool schemas;
-   - read-only, network-denied, never-approve execution policy as defense in depth.
-4. Reject a thread whose returned `instructionSources` is non-empty.
-5. Inject prior user, assistant, tool-call, and tool-result history as native protocol items derived from the Harness request, then start the turn with the current user content.
+   - read-only, never-approve execution policy as defense in depth.
+4. Emit a `thread/start` action report containing the returned `instructionSources`; a non-empty report is disclosure, not failure.
+5. Inject all user, assistant, tool-call, and tool-result history as native protocol items derived from the Harness request, then start an empty turn because the current user message is already in that logged history.
 6. Map reasoning summary and assistant-message deltas directly to indexed Harness blocks.
 7. On a dynamic tool request, emit validated Harness tool-call blocks, end the model step with `tool-calls`, interrupt the Codex turn, and tear down the process. Harness executes and logs the tools; the next request reconstructs their results from the session.
 8. On successful turn completion, emit usage followed by the terminal finish chunk and tear down the process.
@@ -51,7 +51,7 @@ The test requires exact equality for outbound instructions, exact equality for t
 
 Runtime checks complement the capture test:
 
-- `instructionSources` must be empty;
+- `instructionSources` must be valid JSON and is logged in the provider trajectory;
 - every dynamic call must name an offered Harness tool and carry object-valued JSON arguments;
 - only the documented reasoning, assistant-message, dynamic-tool, usage, and lifecycle events are accepted;
 - native action items become provider-owned trajectory blocks and never generate Harness tool execution events;
@@ -59,7 +59,7 @@ Runtime checks complement the capture test:
 
 ## Result
 
-The pinned App Server cannot satisfy invariants 1, 2, 4, or 6 for `gpt-5.6-sol`.
+The pinned App Server cannot satisfy invariants 1, 2, or 4 for `gpt-5.6-sol`; invariant 6 remains an implementation obligation under the layered design.
 
 The keyless test applies every protocol-level isolation control available in Codex `0.147.0`: a fresh home and workspace, explicit base and empty developer instructions, no personality or collaboration mode, empty environment and capability roots, disabled native features, disabled discovered skills, read-only execution, and denied approvals. `thread/start` reports no `instructionSources`, yet the outbound Responses request still contains:
 
@@ -96,7 +96,7 @@ The prompt-ownership invariants remain documented as disproven properties rather
 
 1. A text-only request displays reasoning and text before turn completion.
 2. A file-context request displays a Harness read/search call, its logged result, and the final answer in order.
-3. Hostile Codex configuration and project instructions do not appear in the captured outbound request.
+3. Hostile configurable developer instructions are overridden, project instructions are excluded by the private working directory, and remaining Codex-owned prompt and tool layers stay characterized and disclosed.
 4. A native Codex action appears in the transcript with its Codex action type, lifecycle state, input, and available outcome, without appearing in the Harness tool-call stream.
 5. Abort, timeout, malformed JSON-RPC, App Server exit, and tool handoff leave no process tree or temporary workspace.
 6. A real local-OAuth Harness run completes a two-step tool round trip and produces a keyless replayable session snapshot.

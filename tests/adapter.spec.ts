@@ -1,29 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 import { MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
-import { CodexExecAdapter } from '../src/adapter.ts'
-import type { CodexRunOutput, CodexRunnerPort, CodexRunRequest } from '../src/runner.ts'
-
-const success: CodexRunOutput = {
-  stdout: [
-    JSON.stringify({
-      type: 'item.completed',
-      item: {
-        type: 'agent_message',
-        text: '{"kind":"message","text":"hello","calls":[]}',
-      },
-    }),
-    JSON.stringify({ type: 'turn.completed' }),
-  ].join('\n'),
-  stderr: '',
-  exitCode: 0,
-  signal: null,
-}
+import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { CodexAppServerAdapter } from '../src/adapter.ts'
+import type {
+  CodexAppServerEvent,
+  CodexAppServerRequest,
+  CodexAppServerRunnerPort,
+} from '../src/runner.ts'
 
 function request(overrides: Partial<GenerateOptions> = {}): GenerateOptions {
   return {
     provider: 'codex-local',
     model: 'gpt-5.6-sol',
+    system: 'Harness system',
     messages: [{
       id: MessageId('user-1'),
       role: 'user',
@@ -34,14 +23,35 @@ function request(overrides: Partial<GenerateOptions> = {}): GenerateOptions {
   }
 }
 
-function adapter(output: CodexRunOutput = success) {
-  const run = vi.fn(async (_request: CodexRunRequest) => output)
-  const runner: CodexRunnerPort = { run }
+function turnCompleted(status: 'completed' | 'failed' = 'completed'): CodexAppServerEvent {
   return {
-    run,
-    adapter: new CodexExecAdapter({
+    kind: 'notification',
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-1',
+      turn: {
+        id: 'turn-1',
+        status,
+        error: status === 'completed' ? null : { message: 'status 429: too many requests' },
+      },
+    },
+  }
+}
+
+function adapter(events: readonly CodexAppServerEvent[]) {
+  const stream = vi.fn((input: CodexAppServerRequest): AsyncIterable<CodexAppServerEvent> => {
+    return (async function * () {
+      void input
+      for (const event of events) yield event
+    })()
+  })
+  const runner: CodexAppServerRunnerPort = { stream }
+  return {
+    stream,
+    adapter: new CodexAppServerAdapter({
       provider: 'codex-local',
       displayName: 'Codex local',
+      modelProvider: 'openai',
       models: [{
         id: 'gpt-5.6-sol',
         name: 'GPT-5.6 Sol',
@@ -55,15 +65,15 @@ function adapter(output: CodexRunOutput = success) {
   }
 }
 
-async function collect(instance: CodexExecAdapter, options: GenerateOptions) {
-  const chunks = []
+async function collect(instance: CodexAppServerAdapter, options: GenerateOptions): Promise<StreamChunk[]> {
+  const chunks: StreamChunk[] = []
   for await (const chunk of instance.stream(options)) chunks.push(chunk)
   return chunks
 }
 
-describe('CodexExecAdapter', () => {
+describe('CodexAppServerAdapter', () => {
   it('advertises the provider, model, context, reasoning, and no retries', async () => {
-    const { adapter: instance } = adapter()
+    const { adapter: instance } = adapter([])
     expect(instance.providerInfo('codex-local')).toEqual({ id: 'codex-local', name: 'Codex local' })
     expect(instance.providerRetryPolicy('codex-local')).toMatchObject({
       mode: 'normal',
@@ -84,35 +94,227 @@ describe('CodexExecAdapter', () => {
     })
   })
 
-  it('runs one model request and emits a complete chunk sequence', async () => {
-    const { adapter: instance, run } = adapter()
+  it('streams provider disclosure, reasoning, text, usage, and replay state', async () => {
+    const events: CodexAppServerEvent[] = [
+      {
+        kind: 'thread-started',
+        threadId: 'thread-1',
+        userAgent: 'codex_app_server/0.147.0',
+        instructionSources: [{ path: 'C:/Users/test/.codex/AGENTS.md' }],
+      },
+      {
+        kind: 'notification',
+        method: 'item/reasoning/summaryTextDelta',
+        params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'reasoning-1', summaryIndex: 0, delta: 'think' },
+      },
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { type: 'reasoning', encrypted_content: 'opaque', summary: [] },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'item/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { type: 'reasoning', id: 'reasoning-1', summary: ['think'], content: [] },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'item/agentMessage/delta',
+        params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'message-1', delta: 'hello' },
+      },
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'hello' }] },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'item/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { type: 'agentMessage', id: 'message-1', text: 'hello' },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'rawResponse/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          usage: {
+            totalTokens: 16,
+            inputTokens: 10,
+            cachedInputTokens: 4,
+            cacheWriteInputTokens: 1,
+            outputTokens: 6,
+            reasoningOutputTokens: 2,
+          },
+        },
+      },
+      turnCompleted(),
+    ]
+    const { adapter: instance, stream } = adapter(events)
     const chunks = await collect(instance, request({ reasoningEffort: ReasoningEffortId('high') }))
-    expect(run).toHaveBeenCalledOnce()
-    expect(run.mock.calls[0]![0]).toMatchObject({
+
+    expect(stream).toHaveBeenCalledOnce()
+    expect(stream.mock.calls[0]![0]).toMatchObject({
       model: 'gpt-5.6-sol',
+      modelProvider: 'openai',
       reasoningEffort: 'high',
+      system: 'Harness system',
+      history: [expect.objectContaining({ type: 'message', role: 'user' })],
     })
-    expect(run.mock.calls[0]![0].prompt).toContain('HARNESS_REQUEST_JSON')
-    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+    expect(chunks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'block-end', block: expect.objectContaining({
+        type: 'codex-action',
+        actionType: 'thread/start',
+        snapshot: expect.objectContaining({ ownership: 'layered' }),
+      }) }),
+      expect.objectContaining({ type: 'reasoning-delta', text: 'think' }),
+      expect.objectContaining({ type: 'text-delta', text: 'hello' }),
+      {
+        type: 'usage',
+        usage: {
+          inputTokens: 5,
+          outputTokens: 6,
+          cacheReadTokens: 4,
+          cacheWriteTokens: 1,
+          reasoningTokens: 2,
+        },
+      },
+    ]))
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'stop' },
+      replayState: {
+        kind: 'codex-app-server',
+        version: 0,
+        items: [
+          expect.objectContaining({ type: 'reasoning' }),
+          expect.objectContaining({ type: 'message' }),
+        ],
+      },
+    })
+  })
+
+  it('hands dynamic tools to Harness and ends the step without provider execution', async () => {
+    const events: CodexAppServerEvent[] = [
+      {
+        kind: 'server-request',
+        id: 'rpc-1',
+        method: 'item/tool/call',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          callId: 'call-1',
+          namespace: null,
+          tool: 'read_file',
+          arguments: { path: 'a.txt' },
+        },
+        resolution: 'rejected',
+      },
+    ]
+    const { adapter: instance } = adapter(events)
+    const chunks = await collect(instance, request({
+      tools: [{
+        name: 'read_file',
+        description: 'Read one file.',
+        parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      }],
+    }))
+
+    expect(chunks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'block-end',
+        block: {
+          type: 'tool-call',
+          id: 'call-1',
+          name: 'read_file',
+          arguments: '{"path":"a.txt"}',
+        },
+      }),
+    ]))
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'tool-calls' },
+      replayState: {
+        items: [expect.objectContaining({ type: 'function_call', call_id: 'call-1' })],
+      },
+    })
+  })
+
+  it('renders Codex-native action lifecycles without marking the request failed', async () => {
+    const events: CodexAppServerEvent[] = [
+      {
+        kind: 'notification',
+        method: 'item/started',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { type: 'commandExecution', id: 'command-1', command: 'pwd', status: 'inProgress' },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'item/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: {
+            type: 'commandExecution',
+            id: 'command-1',
+            command: 'pwd',
+            status: 'completed',
+            aggregatedOutput: 'C:/tmp',
+            exitCode: 0,
+          },
+        },
+      },
+      turnCompleted(),
+    ]
+    const { adapter: instance } = adapter(events)
+    const chunks = await collect(instance, request())
+    const actions = chunks.flatMap(chunk => chunk.type === 'block-end' && chunk.block.type === 'codex-action'
+      ? [chunk.block]
+      : [])
+
+    expect(actions).toEqual([
+      expect.objectContaining({ actionType: 'commandExecution', phase: 'started' }),
+      expect.objectContaining({
+        actionType: 'commandExecution',
+        phase: 'completed',
+        snapshot: expect.objectContaining({ aggregatedOutput: 'C:/tmp', exitCode: 0 }),
+      }),
+    ])
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    expect(chunks.some(chunk => chunk.type === 'tool-call-delta')).toBe(false)
   })
 
   it.each([
     { temperature: 0 },
     { maxTokens: 10 },
     { stop: ['END'] },
-  ] satisfies Array<Partial<GenerateOptions>>)('rejects unsupported CLI option %#', async (override) => {
-    const { adapter: instance, run } = adapter()
+  ] satisfies Array<Partial<GenerateOptions>>)('rejects unsupported App Server option %#', async (override) => {
+    const { adapter: instance, stream } = adapter([])
     await expect(collect(instance, request(override))).rejects.toMatchObject({ code: 'UNSUPPORTED_OPTION' })
-    expect(run).not.toHaveBeenCalled()
+    expect(stream).not.toHaveBeenCalled()
   })
 
-  it('maps nonzero process exit details', async () => {
-    const { adapter: instance } = adapter({
-      stdout: '',
-      stderr: 'status 429: too many requests',
-      exitCode: 1,
-      signal: null,
-    })
+  it('maps an actual failed Codex turn', async () => {
+    const { adapter: instance } = adapter([turnCompleted('failed')])
     await expect(collect(instance, request())).rejects.toMatchObject({ code: 'RATE_LIMIT' })
   })
 })

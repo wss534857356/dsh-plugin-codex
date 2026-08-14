@@ -1,20 +1,22 @@
-# dsh-llm-codex-exec
+# dsh-llm-codex-app-server
 
-`dsh-llm-codex-exec` registers a DeepSeek Harness main-model provider backed by the locally authenticated Codex CLI. It is an out-of-tree Harness bundle: installing it does not modify the `deepseek-harness` repository.
+`dsh-llm-codex-app-server` registers a DeepSeek Harness main-model provider backed by the locally authenticated Codex App Server. It is an out-of-tree Harness bundle, so installing it does not modify the `deepseek-harness` repository.
 
-This is different from Harness's built-in `@deepseek-ai/dsh-subagent-codex`. The built-in package exposes Codex as a delegated child Agent. This package registers on `ctx.llm`, so `codex-local` appears as a selectable provider for the Harness Agent loop.
+This differs from Harness's built-in `@deepseek-ai/dsh-subagent-codex`. The built-in package exposes Codex as a delegated child Agent. This package registers on `ctx.llm`, so `codex-local` is a selectable provider for the Harness Agent loop.
 
 ## How it works
 
-Every Harness model request starts one pinned `@openai/codex@0.147.0` `codex exec --json --ephemeral` process. The process uses the native Codex account state under `CODEX_HOME`; the plugin never reads, copies, logs, or stores OAuth tokens or API keys.
+Every Harness model step starts the pinned `@openai/codex@0.147.0` App Server in a private empty directory and creates one ephemeral thread. The process uses the native Codex account state under `CODEX_HOME`; the plugin never reads, copies, logs, or stores OAuth tokens or API keys.
 
-The adapter serializes the Harness system prompt, durable messages, and tool schemas into one deterministic JSON request. Codex returns a schema-constrained object containing either a final assistant message or Harness tool calls. The adapter maps that object to `StreamChunk`s. Tool calls are executed by Harness and their logged results return in the next request; Codex-native tools are disabled and the child runs in an empty private directory with a read-only sandbox and `approval_policy="never"`.
+The adapter supplies the Harness system text as App Server base instructions, reconstructs the ordered conversation from logged Harness messages through `thread/inject_items`, declares Harness tools as App Server dynamic tools, and starts an empty turn. App Server still adds Codex-owned instructions and tools. This is deliberately a layered provider, not a raw-model transport or a claim that Harness replaces the Codex prompt.
 
-The CLI emits its final response only after the turn completes, so the adapter exposes complete blocks rather than live token deltas.
+Reasoning, assistant text, usage, diagnostics, and action lifecycles are converted to Harness stream events as they arrive. A Codex-native command, file change, search, MCP call, plan, or similar activity becomes a logged `codex-action` content block containing its Codex type, phase, and protocol snapshot. It is never emitted as a Harness `tool-call` and does not make the request fail merely because it occurred.
+
+When App Server requests a declared dynamic tool, the adapter emits a real Harness `tool-call`, ends that model step, and tears down the App Server process without returning a provider-side tool result. Harness owns execution, approval, presentation, and durable logging. The next step injects the logged tool result together with the prior raw provider items.
 
 ## Install
 
-First authenticate the native CLI once:
+Authenticate the native CLI once:
 
 ```sh
 codex login
@@ -30,41 +32,43 @@ pnpm run check
 Install the generated tarball into a Harness profile:
 
 ```sh
-dsh plugin --profile web add ./dist/dsh-llm-codex-exec-0.1.0.tgz
+dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.0.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
 
-The bundle registers provider `codex-local` and model `gpt-5.6-sol`. Select it in the Models UI. It does not replace the profile's default model automatically.
+The bundle registers provider `codex-local` and model `gpt-5.6-sol`. Select it in the Models UI. Installation does not replace the profile's default model automatically.
 
-The install may report missing peer dependencies because Harness profiles deliberately set `autoInstallPeers: false`. At boot, the profile module fallback supplies those peers from the current Harness installation so the plugin shares its Cordis and service instances.
+Harness profiles set `autoInstallPeers: false`, so installation may report missing peer dependencies. At boot, the profile module fallback supplies those peers from the current Harness installation so the plugin shares its Cordis and service instances.
 
-For source installation, use `dsh plugin --profile web add github:<owner>/<repo>#<commit>`. The package's `prepare` script builds TypeScript during a Git install, so pnpm requires the profile to allow that package build. A packed tarball or npm release is prebuilt and needs no install-time build permission.
+For source installation, use `dsh plugin --profile web add github:<owner>/<repo>#<commit>`. The package's `prepare` script builds TypeScript during a Git install, so pnpm must allow that package build. A packed tarball or npm release is already built.
 
 ## Configuration
 
-Later profile patch layers can replace the `llm-codex-exec` row. A replacement must restate the complete config because Harness patch rows do not deep-merge.
+Later profile patch layers can replace the `llm-codex-app-server` row. A replacement must restate the complete config because Harness patch rows do not deep-merge.
 
 | Key | Default | Meaning |
 |---|---:|---|
 | `provider` | `codex-local` | Harness provider route. |
 | `displayName` | `Codex (local login)` | Selector label. |
-| `models` | GPT-5.6 Sol catalog entry | Advisory model metadata and reasoning choices. Unlisted CLI-safe model ids remain routable. |
-| `timeoutMs` | `300000` | Wall-clock limit for one CLI turn. |
+| `modelProvider` | `openai` | Codex App Server model-provider id. |
+| `models` | GPT-5.6 Sol catalog entry | Advisory model metadata and reasoning choices. Unlisted safe model ids remain routable. |
+| `timeoutMs` | `300000` | Wall-clock limit for one App Server turn. |
 | `disposeGraceMs` | `3000` | Process-tree termination grace. |
-| `maxStdoutBytes` | `4194304` | Maximum retained Codex JSONL output. |
+| `maxStdoutBytes` | `4194304` | Maximum App Server JSON-RPC bytes accepted for one step. |
 | `maxStderrBytes` | `65536` | Maximum retained diagnostic output. |
-| `maxRetries` | `0` | Harness-visible retries for transient process/provider failures. |
-| `env` | `{}` | Explicit child environment layered over Harness's credential-scrubbed parent environment. Use this to pass `CODEX_HOME` when it is nonstandard. |
+| `maxRetries` | `0` | Harness-visible retries for transient process or provider failures. |
+| `env` | `{}` | Explicit child environment layered over Harness's scrubbed parent environment. Use this to pass `CODEX_HOME` when it is nonstandard. |
 
 Example override:
 
 ```yaml
-- id: llm-codex-exec
-  name: dsh-llm-codex-exec
+- id: llm-codex-app-server
+  name: dsh-llm-codex-app-server
   config:
     provider: codex-local
     displayName: Codex (local login)
+    modelProvider: openai
     models:
       - id: gpt-5.6-sol
         name: GPT-5.6 Sol
@@ -82,17 +86,20 @@ Example override:
 
 ## Compatibility and limitations
 
-- The verified protocol baseline is Codex CLI `0.147.0`; the dependency is pinned because JSONL events, feature names, the output-schema subset, and the internal originator override are not a stable standalone LLM API.
-- This is an experimental bridge over a complete coding Agent, not a native token-streaming API. Codex's own base instructions remain part of each request and add substantial token overhead.
-- The bridge supports text, reasoning history, and Harness tool calls. Image input is rejected before process startup.
-- `temperature`, `maxTokens`, and `stop` are rejected because this CLI path cannot represent them reliably. Auxiliary calls that require `maxTokens`, including LLM-backed session titles and basic compaction, cannot use this provider.
-- `CODEX_INTERNAL_ORIGINATOR_OVERRIDE=deepseek-harness` identifies requests from the adapter, but the variable is an internal Codex compatibility point and must be reverified on upgrades.
-- Each request uses a fresh ephemeral Codex thread. Context is reconstructed from the Harness session log; there is no native thread resume or provider replay state.
-- Authentication and subscription availability belong to the native Codex installation. Login failures surface as Harness `AUTH` failures; this plugin provides no credential UI.
+- The protocol baseline is Codex CLI `0.147.0`; the dependency and runtime handshake are pinned because the experimental App Server protocol is version-sensitive.
+- Codex co-owns the model-visible instructions and tool catalog. The keyless wire test records the extra permission, primary-agent, collaboration, environment, interaction, and code-mode layers that remain after supported thread overrides.
+- Code Mode remains enabled because `gpt-5.6-sol` uses it to dispatch App Server dynamic tools. Optional native integrations are disabled where that does not break this dispatch path.
+- Native Codex actions may still occur. They run in a private empty working directory under a read-only sandbox with approvals set to `never`; their lifecycle snapshots are displayed as provider trajectory, and approval or interaction requests are safely declined unless the protocol can answer them without user authority.
+- Discovered instruction sources are shown in the `thread/start` action report. A non-empty report is disclosure, not a request failure.
+- The provider accepts text input. Image input is rejected before process startup.
+- `temperature`, `maxTokens`, and `stop` are rejected because this App Server path does not expose reliable equivalents. Auxiliary calls that require `maxTokens`, including LLM-backed session titles and basic compaction, cannot use this provider.
+- `CODEX_INTERNAL_ORIGINATOR_OVERRIDE=deepseek-harness` identifies adapter requests; this internal compatibility point is reverified on Codex upgrades.
+- Each model step uses a fresh ephemeral thread. Durable Harness messages and adapter replay state reconstruct model-visible history; no Codex thread is resumed.
+- Authentication and subscription availability belong to the native Codex installation. Login failures surface as Harness `AUTH` failures; the plugin provides no credential UI.
 
 ## Development
 
-The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound model request despite all supported isolation controls. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts a layered App Server provider: Harness owns history, dynamic-tool execution, logging, and trajectory while Codex remains a disclosed co-owner of model-visible instructions and tools.
+The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound request. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts the implemented ownership split: Harness owns durable history, dynamic-tool execution, logging, and trajectory while Codex remains a disclosed co-owner of model-visible instructions and tools.
 
 ```sh
 pnpm run typecheck
@@ -101,10 +108,10 @@ pnpm run build
 pnpm pack --pack-destination dist
 ```
 
-Unit tests use no account. With `codex login` already completed, run the real local-login smoke directly:
+Unit and wire tests require no account. With `codex login` already completed, run the real local-login round trip:
 
 ```sh
 pnpm run test:e2e
 ```
 
-It loads the real Harness LLM and local-subprocess providers, performs one Harness-owned tool round trip over two fresh Codex processes, and verifies both process trees have exited. Before release, also install the packed tarball into an isolated profile and run one headless task with `agent-default-model` set to `codex-local`.
+The real test loads the Harness LLM and local-subprocess providers, completes a two-step Harness tool round trip over fresh App Server processes, and verifies process-tree quiescence.

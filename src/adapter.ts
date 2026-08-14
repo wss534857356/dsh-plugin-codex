@@ -1,4 +1,4 @@
-/** Harness LLM adapter backed by one ephemeral Codex CLI process per request. */
+/** Harness LLM adapter backed by one ephemeral Codex App Server per request. */
 
 import {
   LlmAdapter,
@@ -13,8 +13,14 @@ import type {
   ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import { buildBridgePrompt, codexFailureCode, parseCodexJsonl, responseChunks } from './protocol.ts'
-import type { CodexRunnerPort } from './runner.ts'
+import {
+  AppServerEventMapper,
+  appServerDynamicTools,
+  appServerHistory,
+  assertCompletedTurn,
+  harnessToolCall,
+} from './protocol.ts'
+import type { CodexAppServerRunnerPort } from './runner.ts'
 
 /** One model exposed in the Harness selector. */
 export interface CodexModel {
@@ -30,9 +36,10 @@ export interface CodexModel {
 export interface CodexAdapterOptions {
   readonly provider: string
   readonly displayName: string
+  readonly modelProvider: string
   readonly models: readonly CodexModel[]
   readonly maxRetries: number
-  readonly runner: CodexRunnerPort
+  readonly runner: CodexAppServerRunnerPort
 }
 
 const RETRYABLE_CODES = Object.freeze(['RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'])
@@ -47,8 +54,8 @@ function modelInfo(provider: string, model: CodexModel): LlmModelInfo {
   }
 }
 
-/** Main-model adapter that translates complete Harness calls through `codex exec`. */
-export class CodexExecAdapter extends LlmAdapter {
+/** Main-model adapter that maps live App Server events into the Harness loop. */
+export class CodexAppServerAdapter extends LlmAdapter {
   constructor(private readonly options: CodexAdapterOptions) {
     super()
   }
@@ -108,26 +115,47 @@ export class CodexExecAdapter extends LlmAdapter {
   override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     if (options.temperature !== undefined || options.maxTokens !== undefined || options.stop !== undefined) {
       throw new LlmError(
-        'Codex CLI bridge does not support temperature, maxTokens, or stop overrides',
+        'Codex App Server provider does not support temperature, maxTokens, or stop overrides',
         'UNSUPPORTED_OPTION',
       )
     }
-    const result = await this.options.runner.run({
+    const mapper = new AppServerEventMapper()
+    for await (const event of this.options.runner.stream({
       model: options.model,
+      modelProvider: this.options.modelProvider,
       ...(options.reasoningEffort === undefined
         ? {}
         : { reasoningEffort: String(options.reasoningEffort) }),
-      prompt: buildBridgePrompt(options),
+      system: options.system ?? '',
+      history: appServerHistory(options),
+      dynamicTools: appServerDynamicTools(options.tools),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
-    })
-    if (result.exitCode !== 0 || result.signal !== null) {
-      const detail = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join('\n')
-      const suffix = detail.length === 0 ? '' : `: ${detail.slice(-4_000)}`
-      throw new LlmError(
-        `Codex process exited with code ${String(result.exitCode)} and signal ${String(result.signal)}${suffix}`,
-        codexFailureCode(detail),
-      )
+    })) {
+      for (const chunk of mapper.accept(event)) yield chunk
+      if (event.kind === 'server-request' && event.method === 'item/tool/call') {
+        for (const chunk of mapper.closeOpen()) yield chunk
+        const call = harnessToolCall(event, options.tools)
+        for (const chunk of mapper.toolCall(call)) yield chunk
+        yield {
+          type: 'finish',
+          reason: { kind: 'tool-calls' },
+          replayState: mapper.replayState(),
+        }
+        return
+      }
+      if (event.kind === 'notification' && event.method === 'turn/completed') {
+        for (const chunk of mapper.closeOpen()) yield chunk
+        assertCompletedTurn(event)
+        const usage = mapper.usage()
+        if (usage !== undefined) yield { type: 'usage', usage }
+        yield {
+          type: 'finish',
+          reason: { kind: 'stop' },
+          replayState: mapper.replayState(),
+        }
+        return
+      }
     }
-    for (const chunk of responseChunks(parseCodexJsonl(result.stdout, options.tools))) yield chunk
+    throw new LlmError('Codex App Server stream ended without a terminal event', 'TRANSPORT')
   }
 }
