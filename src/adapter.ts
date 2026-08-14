@@ -185,8 +185,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
           const usage = mapper.usage()
           if (usage !== undefined) yield { type: 'usage', usage }
           const replayState = mapper.replayState()
-          cached?.commit(extendAppServerHistory(history, replayState.items), String(call.id))
-          retained = true
+          retained = await this.settleCache(cached, mapper, history, replayState.items, String(call.id))
           yield {
             type: 'finish',
             reason: { kind: 'tool-calls' },
@@ -200,8 +199,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
           const usage = mapper.usage()
           if (usage !== undefined) yield { type: 'usage', usage }
           const replayState = mapper.replayState()
-          cached?.commit(extendAppServerHistory(history, replayState.items))
-          retained = true
+          retained = await this.settleCache(cached, mapper, history, replayState.items)
           yield {
             type: 'finish',
             reason: { kind: 'stop' },
@@ -236,7 +234,23 @@ export class CodexAppServerAdapter extends LlmAdapter {
       reasoningEffort: options.reasoningEffort === undefined ? null : String(options.reasoningEffort),
       system: options.system ?? '',
       dynamicTools: [...dynamicTools],
-      threadPolicy: 'harness-read-only-v1',
+      threadPolicy: 'harness-read-only-no-native-compaction-v2',
     }
+  }
+
+  private async settleCache(
+    cached: CodexSessionStep | undefined,
+    mapper: AppServerEventMapper,
+    history: readonly JsonValue[],
+    outputs: readonly JsonValue[],
+    pendingCallId?: string,
+  ): Promise<boolean> {
+    if (cached === undefined) return false
+    if (!mapper.canReuseThread()) {
+      await cached.discard()
+      return false
+    }
+    cached.commit(extendAppServerHistory(history, outputs), pendingCallId)
+    return true
   }
 }

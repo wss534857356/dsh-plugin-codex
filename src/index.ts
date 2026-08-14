@@ -67,7 +67,7 @@ const DEFAULT_MODELS = [{
   id: 'gpt-5.6-sol',
   name: 'GPT-5.6 Sol',
   description: 'Codex CLI model reached through the local account session.',
-  contextWindow: 272_000,
+  contextWindow: 258_400,
   reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   defaultReasoningEffort: 'low',
 }]

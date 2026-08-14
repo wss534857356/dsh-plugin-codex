@@ -110,6 +110,39 @@ describe('App Server protocol translation', () => {
     expect(history).toEqual([raw])
   })
 
+  it('removes legacy native compaction state from reconstructed replay', () => {
+    const answer = {
+      type: 'message',
+      id: 'answer-1',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'answer' }],
+    }
+    const history = appServerHistory(options({
+      messages: [{
+        id: MessageId('assistant-1'),
+        role: 'assistant',
+        source: {
+          kind: 'model',
+          provider: 'codex-local',
+          model: 'gpt-5.6-sol',
+          replayState: {
+            kind: 'codex-app-server',
+            version: 1,
+            items: [
+              { type: 'compaction', encrypted_content: 'opaque' },
+              { type: 'context_compaction', encrypted_content: 'opaque-context' },
+              answer,
+            ],
+            contextItems: [],
+          },
+        },
+        content: [{ type: 'text', text: 'answer' }],
+      }],
+    }))
+
+    expect(history).toEqual([answer])
+  })
+
   it('coalesces cumulative replay snapshots while preserving Harness results', () => {
     const callId = CallId('call-1')
     const firstReasoning = {
@@ -321,6 +354,35 @@ describe('App Server protocol translation', () => {
       items: [first, second],
       contextItems: [context],
     })
+  })
+
+  it.each(['compaction', 'compaction_trigger', 'context_compaction'])(
+    'marks a raw %s item as non-reconstructible provider trajectory',
+    (type) => {
+      const mapper = new AppServerEventMapper()
+      mapper.accept({
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { type, encrypted_content: 'opaque' },
+        },
+      })
+
+      expect(mapper.canReuseThread()).toBe(false)
+      expect(mapper.replayState().items).toEqual([])
+    },
+  )
+
+  it('marks a native thread compaction notification as non-reusable', () => {
+    const mapper = new AppServerEventMapper()
+    mapper.accept({
+      kind: 'notification',
+      method: 'thread/compacted',
+      params: { threadId: 'thread-1', turnId: 'turn-1' },
+    })
+    expect(mapper.canReuseThread()).toBe(false)
   })
 
   it('maps the exact Harness catalog to dynamic tools', () => {

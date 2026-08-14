@@ -27,6 +27,7 @@ export type { CodexAppServerEvent, JsonValue } from './wire.ts'
 export const CODEX_APP_SERVER_VERSION = '0.147.0'
 
 const WORKDIR_PREFIX = 'dsh-codex-app-server-'
+const HARNESS_COMPACTION_THRESHOLD = Number.MAX_SAFE_INTEGER
 const TIMEOUT_REASON = Symbol('codex-app-server-timeout')
 const CONSUMER_REASON = Symbol('codex-app-server-consumer-stop')
 const CODEX_DISABLED_FEATURES = [
@@ -132,6 +133,8 @@ export function codexAppServerArgv(): string[] {
     'analytics.enabled=false',
     '-c',
     'web_search="disabled"',
+    '-c',
+    `model_auto_compact_token_limit=${String(HARNESS_COMPACTION_THRESHOLD)}`,
     ...disabled,
   ]
 }

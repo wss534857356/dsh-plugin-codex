@@ -42,6 +42,40 @@ function turnCompleted(status: 'completed' | 'failed' = 'completed'): CodexAppSe
   }
 }
 
+function answerEvents(
+  id: string,
+  text: string,
+  leading: readonly CodexAppServerEvent[] = [],
+): CodexAppServerEvent[] {
+  return [
+    ...leading,
+    {
+      kind: 'notification',
+      method: 'rawResponseItem/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: `turn-${id}`,
+        item: {
+          type: 'message',
+          id: `raw-answer-${id}`,
+          role: 'assistant',
+          content: [{ type: 'output_text', text }],
+        },
+      },
+    },
+    {
+      kind: 'notification',
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-1',
+        turnId: `turn-${id}`,
+        item: { type: 'agentMessage', id: `answer-${id}`, text },
+      },
+    },
+    turnCompleted(),
+  ]
+}
+
 function instance(runner: CodexAppServerRunnerPort): CodexAppServerAdapter {
   return new CodexAppServerAdapter({
     provider: 'codex-local',
@@ -298,59 +332,10 @@ describe('CodexAppServerAdapter', () => {
   })
 
   it('reuses one session thread and appends the next user message through turn input', async () => {
-    const firstEvents: CodexAppServerEvent[] = [
-      {
-        kind: 'notification',
-        method: 'rawResponseItem/completed',
-        params: {
-          threadId: 'thread-1',
-          turnId: 'turn-1',
-          item: {
-            type: 'message',
-            id: 'raw-answer-1',
-            role: 'assistant',
-            content: [{ type: 'output_text', text: 'first answer' }],
-          },
-        },
-      },
-      {
-        kind: 'notification',
-        method: 'item/completed',
-        params: {
-          threadId: 'thread-1',
-          turnId: 'turn-1',
-          item: { type: 'agentMessage', id: 'answer-1', text: 'first answer' },
-        },
-      },
-      turnCompleted(),
-    ]
-    const secondEvents: CodexAppServerEvent[] = [
-      {
-        kind: 'notification',
-        method: 'rawResponseItem/completed',
-        params: {
-          threadId: 'thread-1',
-          turnId: 'turn-2',
-          item: {
-            type: 'message',
-            id: 'raw-answer-2',
-            role: 'assistant',
-            content: [{ type: 'output_text', text: 'second answer' }],
-          },
-        },
-      },
-      {
-        kind: 'notification',
-        method: 'item/completed',
-        params: {
-          threadId: 'thread-1',
-          turnId: 'turn-2',
-          item: { type: 'agentMessage', id: 'answer-2', text: 'second answer' },
-        },
-      },
-      turnCompleted(),
-    ]
-    const cached = cachedAdapter([firstEvents, secondEvents])
+    const cached = cachedAdapter([
+      answerEvents('1', 'first answer'),
+      answerEvents('2', 'second answer'),
+    ])
     const firstRequest = request({ sessionId: SessionId('session-1') })
     const firstChunks = await collect(cached.adapter, firstRequest)
     const firstAnswer: Message = {
@@ -387,6 +372,56 @@ describe('CodexAppServerAdapter', () => {
       input: [{ type: 'text', text: 'follow up', text_elements: [] }],
     })
     expect(secondChunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    await cached.adapter.dispose()
+  })
+
+  it('discards a thread after native Codex compaction and cold-rebuilds the next request', async () => {
+    const cached = cachedAdapter([
+      answerEvents('1', 'first answer', [{
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: { type: 'context_compaction', encrypted_content: 'opaque' },
+        },
+      }]),
+      answerEvents('2', 'second answer'),
+    ])
+    const firstRequest = request({ sessionId: SessionId('session-1') })
+    const firstChunks = await collect(cached.adapter, firstRequest)
+    const firstAnswer: Message = {
+      id: MessageId('assistant-1'),
+      role: 'assistant',
+      source: {
+        kind: 'model',
+        provider: 'codex-local',
+        model: 'gpt-5.6-sol',
+        replayState: replayState(firstChunks),
+      },
+      content: [{ type: 'text', text: 'first answer' }],
+    }
+
+    await collect(cached.adapter, request({
+      sessionId: SessionId('session-1'),
+      messages: [
+        ...firstRequest.messages,
+        firstAnswer,
+        {
+          id: MessageId('user-2'),
+          role: 'user',
+          source: { kind: 'user' },
+          content: [{ type: 'text', text: 'continue' }],
+        },
+      ],
+    }))
+
+    expect(cached.open).toHaveBeenCalledTimes(2)
+    expect(cached.thread.dispose).toHaveBeenCalledOnce()
+    expect(cached.requests[1]).toMatchObject({
+      injectedItems: expect.arrayContaining([expect.objectContaining({ role: 'assistant' })]),
+      input: [{ type: 'text', text: 'continue', text_elements: [] }],
+    })
     await cached.adapter.dispose()
   })
 
@@ -435,33 +470,7 @@ describe('CodexAppServerAdapter', () => {
         resolution: 'rejected',
       },
     ]
-    const completionEvents: CodexAppServerEvent[] = [
-      {
-        kind: 'notification',
-        method: 'rawResponseItem/completed',
-        params: {
-          threadId: 'thread-1',
-          turnId: 'turn-1',
-          item: {
-            type: 'message',
-            id: 'raw-answer-1',
-            role: 'assistant',
-            content: [{ type: 'output_text', text: 'contents received' }],
-          },
-        },
-      },
-      {
-        kind: 'notification',
-        method: 'item/completed',
-        params: {
-          threadId: 'thread-1',
-          turnId: 'turn-1',
-          item: { type: 'agentMessage', id: 'answer-1', text: 'contents received' },
-        },
-      },
-      turnCompleted(),
-    ]
-    const cached = cachedAdapter([toolEvents, completionEvents])
+    const cached = cachedAdapter([toolEvents, answerEvents('1', 'contents received')])
     const tools = [{
       name: 'read_file',
       description: 'Read one file.',

@@ -160,6 +160,7 @@ describe('Codex App Server runner', () => {
     expect(argv).toContain('check_for_update_on_startup=false')
     expect(argv).toContain('analytics.enabled=false')
     expect(argv).toContain('web_search="disabled"')
+    expect(argv).toContain(`model_auto_compact_token_limit=${String(Number.MAX_SAFE_INTEGER)}`)
     expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox')
   })
 

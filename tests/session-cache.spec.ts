@@ -134,7 +134,7 @@ describe('CodexSessionCache', () => {
     await second.discard()
   })
 
-  it('rebuilds from the complete request after a history mismatch', async () => {
+  it('rebuilds from the complete request after repair or Harness compaction replaces history', async () => {
     const { cache, runner, threads } = fixture()
     const first = await cache.begin(request('session-1', [user('first')]))
     first.commit([user('first'), assistant('first')])
@@ -175,6 +175,18 @@ describe('CodexSessionCache', () => {
     })
     expect(runner.open).toHaveBeenCalledOnce()
     await active.discard()
+  })
+
+  it('keeps forked Harness session identities on separate threads', async () => {
+    const { cache, runner } = fixture()
+    const original = await cache.begin(request('session-original', [user('first')]))
+    original.commit([user('first'), assistant('answer')])
+
+    const fork = await cache.begin(request('session-fork', [user('first'), assistant('answer'), user('fork')]))
+
+    expect(runner.open).toHaveBeenCalledTimes(2)
+    await fork.discard()
+    await cache.dispose()
   })
 
   it('expires an idle lease and disposes its process', async () => {

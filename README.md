@@ -78,7 +78,7 @@ Example override:
     models:
       - id: gpt-5.6-sol
         name: GPT-5.6 Sol
-        contextWindow: 272000
+        contextWindow: 258400
         reasoningEfforts: [low, medium, high, xhigh, max, ultra]
         defaultReasoningEffort: low
     timeoutMs: 600000
@@ -95,12 +95,14 @@ Example override:
 ## Compatibility and limitations
 
 - The protocol baseline is Codex CLI `0.147.0`; the dependency and runtime handshake are pinned because the experimental App Server protocol is version-sensitive.
+- The default `258400` context capacity is the effective window reported by the pinned App Server for `gpt-5.6-sol`; deployments may override model metadata when their route reports a different limit.
 - Codex co-owns the model-visible instructions and tool catalog. The keyless wire test records the extra permission, primary-agent, collaboration, environment, interaction, and code-mode layers that remain after supported thread overrides.
 - Code Mode remains enabled because `gpt-5.6-sol` uses it to dispatch App Server dynamic tools. Optional native integrations are disabled where that does not break this dispatch path.
 - Native Codex actions may still occur. They run in a private empty working directory under a read-only sandbox with approvals set to `never`; their lifecycle snapshots are displayed as provider trajectory, and approval or interaction requests are safely declined unless the protocol can answer them without user authority.
 - Discovered instruction sources are shown in the `thread/start` lifecycle report. A non-empty report is disclosure, not a request failure. Codex-generated context that is absent from this list is reported separately as `context/injected`.
 - The provider accepts text input. Image input is rejected before process startup.
 - `temperature`, `maxTokens`, and `stop` are rejected because this App Server path does not expose reliable equivalents. Auxiliary calls that require `maxTokens`, including LLM-backed session titles and basic compaction, cannot use this provider.
+- App Server automatic compaction is configured at Harness's safe integer ceiling so Harness can replace logged history first. Any native compaction item or notification still makes the live lease non-reusable and is never written into reconstructible replay state. Basic compaction must use a summarization provider that supports its `maxTokens` requirement.
 - `CODEX_INTERNAL_ORIGINATOR_OVERRIDE=deepseek-harness` identifies adapter requests; this internal compatibility point is reverified on Codex upgrades.
 - Session-scoped threads are in-memory disposable caches. The Harness log and adapter replay state reconstruct model-visible history after process restart, plugin reload, expiry, eviction, compaction, fork, repair, retry mismatch, or any changed request epoch; Codex rollout files are never resumed.
 - Replay state version `1` contains only provider outputs in `items`; observed Codex-owned context is retained separately in `contextItems` for audit and never reinjected. Reconstruction coalesces cumulative snapshots by stable provider item or call identity, so sessions written by older plugin versions do not multiply the same opaque outputs on later requests. Older replay versions fall back to Harness message reconstruction.

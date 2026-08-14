@@ -21,6 +21,11 @@ import type {
 
 const REPLAY_KIND = 'codex-app-server'
 const REPLAY_VERSION = 1
+const NATIVE_COMPACTION_ITEM_TYPES = new Set([
+  'compaction',
+  'compaction_trigger',
+  'context_compaction',
+])
 
 interface JsonObject {
   readonly [key: string]: unknown
@@ -100,7 +105,17 @@ function replayItems(value: unknown): JsonValue[] | undefined {
     return undefined
   }
   candidate.contextItems.forEach((item, index) => { jsonValue(item, `replayState.contextItems[${index}]`) })
-  return candidate.items.map((item, index) => jsonValue(item, `replayState.items[${index}]`))
+  return candidate.items
+    .map((item, index) => jsonValue(item, `replayState.items[${index}]`))
+    .filter(item => !isNativeCompactionItem(item))
+}
+
+function isNativeCompactionItem(value: JsonValue): boolean {
+  return value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && typeof value.type === 'string'
+    && NATIVE_COMPACTION_ITEM_TYPES.has(value.type)
 }
 
 const FINGERPRINT_IGNORED_KEYS = new Set([
@@ -190,7 +205,7 @@ function appendHistoryItem(
 
 function rawItemDisposition(value: ResponseItem): 'context' | 'replay' | 'trajectory' {
   if (value.type === 'message') return value.role === 'assistant' ? 'replay' : 'context'
-  return value.type === 'compaction_trigger' ? 'trajectory' : 'replay'
+  return NATIVE_COMPACTION_ITEM_TYPES.has(value.type) ? 'trajectory' : 'replay'
 }
 
 function argumentsJson(value: string, label: string): string {
@@ -470,6 +485,7 @@ export class AppServerEventMapper {
   }
   private fallbackUsage: UsageAccumulator | undefined
   private rawUsageSeen = false
+  private nativeCompactionSeen = false
   private nextIndex = 0
   private nextRawAction = 0
 
@@ -508,6 +524,7 @@ export class AppServerEventMapper {
   private retainRawItem(value: unknown): RetainedRawItem {
     const candidate = responseItem(value, `raw response item ${this.rawItems.length + this.contextItems.length}`)
     if (this.consumeBaseline(candidate)) return { kind: 'known' }
+    if (NATIVE_COMPACTION_ITEM_TYPES.has(candidate.type)) this.nativeCompactionSeen = true
     const disposition = rawItemDisposition(candidate)
     if (disposition === 'replay') {
       this.rawItems.push(candidate)
@@ -693,6 +710,7 @@ export class AppServerEventMapper {
       )
     }
     const { method, params } = event
+    if (method === 'thread/compacted') this.nativeCompactionSeen = true
     if (method === 'rawResponseItem/completed') {
       return this.rawItemAction(params)
     }
@@ -821,6 +839,11 @@ export class AppServerEventMapper {
       ...(source.cacheWriteTokens === 0 ? {} : { cacheWriteTokens: source.cacheWriteTokens }),
       ...(source.reasoningTokens === 0 ? {} : { reasoningTokens: source.reasoningTokens }),
     }
+  }
+
+  /** Whether the live thread still has only reconstructible Harness-owned history. */
+  canReuseThread(): boolean {
+    return !this.nativeCompactionSeen
   }
 
   /** Snapshot raw provider items so the next Harness request can inject them. */
