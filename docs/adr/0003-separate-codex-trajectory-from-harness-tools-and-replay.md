@@ -1,0 +1,20 @@
+---
+status: accepted
+---
+
+# Separate Codex trajectory from Harness tools and replay
+
+Classify every raw App Server response item against the exact history injected for the current stateless request. Known history echoes produce no new event. Codex-added developer, system, and user messages become context-category `codex-action` reports and remain in replay metadata for audit, but are not reinjected. New assistant and provider output items remain in lossless replay. Non-message raw items that are not declared Harness tool calls become action-category reports, including Code Mode call and output items that have no App Server `ThreadItem` lifecycle.
+
+Reserve Harness `tool-call` blocks for validated App Server `item/tool/call` server requests naming tools declared by the current Harness request. A raw call naming one of those tools is retained for replay but does not also become a Codex action report. Each Codex report carries its category, phase, exact protocol event, and original JSON snapshot. Native action phases such as `failed` and `declined` describe provider trajectory and do not fail the Harness request unless App Server reports that the turn itself failed.
+
+## Considered Options
+
+- Display only App Server `ThreadItem` lifecycles. This loses raw Code Mode calls and outcomes because the pinned protocol can emit them only as `rawResponseItem/completed`.
+- Store all raw items in replay without displaying them. This preserves future model input but hides Codex-owned context and action execution from the Harness transcript.
+- Reinject every raw item. This duplicates Harness history and Codex-owned context on each stateless step and makes the request grow recursively.
+- Convert raw native calls into Harness tool calls. This assigns execution and failure semantics to the wrong runtime.
+
+## Consequences
+
+Replay state advances to version `1`; version `0` state is not trusted and falls back to logged Harness message reconstruction. The transcript can contain lifecycle and context reports even when the model performs no native action, so `thread/start` alone must not be read as an action trace. Context snapshots increase log volume, but they make the Codex-added model input inspectable. The generic Harness renderer can display the complete block immediately; a dedicated client renderer may later present the same fields more compactly without changing durable data.

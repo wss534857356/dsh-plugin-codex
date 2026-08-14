@@ -122,10 +122,21 @@ describe('real locally authenticated Codex bridge', () => {
     expect(first.finish, JSON.stringify(first.message.content, null, 2)).toEqual({ kind: 'tool-calls' })
     expect(first.message.content).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'codex-action', actionType: 'thread/start' }),
+      expect.objectContaining({
+        type: 'codex-action',
+        actionType: 'context/injected',
+        category: 'context',
+      }),
+      expect.objectContaining({
+        type: 'codex-action',
+        actionType: 'custom_tool_call',
+        category: 'action',
+        phase: 'requested',
+      }),
     ]))
     expect(first.message.source).toMatchObject({
       kind: 'model',
-      replayState: { kind: 'codex-app-server', version: 0 },
+      replayState: { kind: 'codex-app-server', version: 1 },
     })
     const call = toolCall(first.message)
     expect(call.name).toBe(tool.name)

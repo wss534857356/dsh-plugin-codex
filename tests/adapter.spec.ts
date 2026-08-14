@@ -104,6 +104,35 @@ describe('CodexAppServerAdapter', () => {
       },
       {
         kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: {
+            type: 'message',
+            id: 'codex-context-1',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'Codex-owned context' }],
+          },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: {
+            type: 'message',
+            id: 'replayed-user-1',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'hello' }],
+            internal_chat_message_metadata_passthrough: { turn_id: 'provider-generated' },
+          },
+        },
+      },
+      {
+        kind: 'notification',
         method: 'item/reasoning/summaryTextDelta',
         params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'reasoning-1', summaryIndex: 0, delta: 'think' },
       },
@@ -181,7 +210,16 @@ describe('CodexAppServerAdapter', () => {
       expect.objectContaining({ type: 'block-end', block: expect.objectContaining({
         type: 'codex-action',
         actionType: 'thread/start',
+        category: 'lifecycle',
+        protocolEvent: 'thread/start',
         snapshot: expect.objectContaining({ ownership: 'layered' }),
+      }) }),
+      expect.objectContaining({ type: 'block-end', block: expect.objectContaining({
+        type: 'codex-action',
+        actionType: 'context/injected',
+        category: 'context',
+        protocolEvent: 'rawResponseItem/completed',
+        snapshot: expect.objectContaining({ role: 'developer' }),
       }) }),
       expect.objectContaining({ type: 'reasoning-delta', text: 'think' }),
       expect.objectContaining({ type: 'text-delta', text: 'hello' }),
@@ -201,17 +239,37 @@ describe('CodexAppServerAdapter', () => {
       reason: { kind: 'stop' },
       replayState: {
         kind: 'codex-app-server',
-        version: 0,
+        version: 1,
         items: [
           expect.objectContaining({ type: 'reasoning' }),
           expect.objectContaining({ type: 'message' }),
         ],
+        contextItems: [expect.objectContaining({
+          type: 'message',
+          role: 'developer',
+          content: [{ type: 'input_text', text: 'Codex-owned context' }],
+        })],
       },
     })
   })
 
   it('hands dynamic tools to Harness and ends the step without provider execution', async () => {
     const events: CodexAppServerEvent[] = [
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: {
+            type: 'function_call',
+            id: 'provider-item-1',
+            call_id: 'call-1',
+            name: 'read_file',
+            arguments: '{"path":"a.txt"}',
+          },
+        },
+      },
       {
         kind: 'server-request',
         id: 'rpc-1',
@@ -254,6 +312,95 @@ describe('CodexAppServerAdapter', () => {
         items: [expect.objectContaining({ type: 'function_call', call_id: 'call-1' })],
       },
     })
+    expect(chunks.flatMap(chunk => chunk.type === 'block-end' && chunk.block.type === 'codex-action'
+      ? [chunk.block]
+      : [])).toEqual([])
+  })
+
+  it('reports raw Code Mode calls and outcomes as Codex actions', async () => {
+    const events: CodexAppServerEvent[] = [
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: {
+            type: 'custom_tool_call',
+            id: 'raw-call-item-1',
+            call_id: 'native-call-1',
+            name: 'exec',
+            status: 'completed',
+            input: 'await tools.update_plan({ plan: [] })',
+          },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'turn/plan/updated',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          explanation: null,
+          plan: [{ step: 'Inspect', status: 'completed' }],
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: {
+            type: 'custom_tool_call_output',
+            id: 'raw-output-item-1',
+            call_id: 'native-call-1',
+            output: [{ type: 'input_text', text: '{}' }],
+          },
+        },
+      },
+      turnCompleted(),
+    ]
+    const { adapter: instance } = adapter(events)
+    const chunks = await collect(instance, request())
+    const actions = chunks.flatMap(chunk => chunk.type === 'block-end' && chunk.block.type === 'codex-action'
+      ? [chunk.block]
+      : [])
+
+    expect(actions).toEqual([
+      expect.objectContaining({
+        actionId: 'native-call-1',
+        actionType: 'custom_tool_call',
+        category: 'action',
+        phase: 'requested',
+        protocolEvent: 'rawResponseItem/completed',
+        snapshot: expect.objectContaining({ name: 'exec' }),
+      }),
+      expect.objectContaining({
+        actionType: 'turn/plan/updated',
+        category: 'action',
+        phase: 'updated',
+        protocolEvent: 'turn/plan/updated',
+      }),
+      expect.objectContaining({
+        actionId: 'native-call-1',
+        actionType: 'custom_tool_call_output',
+        category: 'action',
+        phase: 'completed',
+        protocolEvent: 'rawResponseItem/completed',
+      }),
+    ])
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'stop' },
+      replayState: {
+        items: [
+          expect.objectContaining({ type: 'custom_tool_call', call_id: 'native-call-1' }),
+          expect.objectContaining({ type: 'custom_tool_call_output', call_id: 'native-call-1' }),
+        ],
+      },
+    })
+    expect(chunks.some(chunk => chunk.type === 'tool-call-delta')).toBe(false)
   })
 
   it('renders Codex-native action lifecycles without marking the request failed', async () => {
@@ -277,9 +424,9 @@ describe('CodexAppServerAdapter', () => {
             type: 'commandExecution',
             id: 'command-1',
             command: 'pwd',
-            status: 'completed',
-            aggregatedOutput: 'C:/tmp',
-            exitCode: 0,
+            status: 'failed',
+            aggregatedOutput: 'permission denied',
+            exitCode: 1,
           },
         },
       },
@@ -295,8 +442,10 @@ describe('CodexAppServerAdapter', () => {
       expect.objectContaining({ actionType: 'commandExecution', phase: 'started' }),
       expect.objectContaining({
         actionType: 'commandExecution',
-        phase: 'completed',
-        snapshot: expect.objectContaining({ aggregatedOutput: 'C:/tmp', exitCode: 0 }),
+        category: 'action',
+        phase: 'failed',
+        protocolEvent: 'item/completed',
+        snapshot: expect.objectContaining({ aggregatedOutput: 'permission denied', exitCode: 1 }),
       }),
     ])
     expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })

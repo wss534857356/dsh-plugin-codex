@@ -25,8 +25,20 @@ A command, file change, search, MCP call, or other action owned and executed by 
 _Avoid_: Provider tool call
 
 **Codex action report**:
-A logged lifecycle snapshot of a Codex-native action, including its Codex action type, state, input, and available outcome. It is provider trajectory, not a request for Harness tool execution.
+A logged `codex-action` block that names its semantic category, lifecycle phase, exact App Server protocol event, input, and available outcome. It is provider trajectory, not a request for Harness tool execution.
 _Avoid_: Harness tool call, tool result
+
+**Codex-owned context**:
+A model-visible message added by Codex after Harness history injection. It is logged and displayed as provider context, but it is not replayed as Harness-authored history on the next stateless request.
+_Avoid_: Harness context, assistant response
+
+**Codex provider lifecycle**:
+An App Server setup or thread event such as the result of `thread/start`. It discloses provider state but does not claim that the model performed an action.
+_Avoid_: Codex-native action, Harness tool call
+
+**Raw Codex action item**:
+A non-message Responses item reported by `rawResponseItem/completed`, including Code Mode `custom_tool_call` and its output, that may have no corresponding App Server `ThreadItem` lifecycle.
+_Avoid_: Unparsed replay state, Harness tool call
 
 **Client instruction layer**:
 The Codex instructions and configuration that a local integration can control before the request reaches OpenAI. OpenAI service-side policies are outside this layer.

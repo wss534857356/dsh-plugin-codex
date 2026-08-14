@@ -119,7 +119,8 @@ export class CodexAppServerAdapter extends LlmAdapter {
         'UNSUPPORTED_OPTION',
       )
     }
-    const mapper = new AppServerEventMapper()
+    const history = appServerHistory(options)
+    const mapper = new AppServerEventMapper(history, options.tools?.map(tool => tool.name))
     for await (const event of this.options.runner.stream({
       model: options.model,
       modelProvider: this.options.modelProvider,
@@ -127,7 +128,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
         ? {}
         : { reasoningEffort: String(options.reasoningEffort) }),
       system: options.system ?? '',
-      history: appServerHistory(options),
+      history,
       dynamicTools: appServerDynamicTools(options.tools),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     })) {

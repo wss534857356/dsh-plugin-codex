@@ -29,9 +29,9 @@ Each Harness model request gets one managed App Server subprocess and one epheme
    - no collaboration mode;
    - dynamic tools derived exactly from Harness tool schemas;
    - read-only, never-approve execution policy as defense in depth.
-4. Emit a `thread/start` action report containing the returned `instructionSources`; a non-empty report is disclosure, not failure.
+4. Emit a lifecycle-category `thread/start` report containing the returned `instructionSources`; a non-empty report is disclosure, not failure and the report is not classified as a model action.
 5. Inject all user, assistant, tool-call, and tool-result history as native protocol items derived from the Harness request, then start an empty turn because the current user message is already in that logged history.
-6. Map reasoning summary and assistant-message deltas directly to indexed Harness blocks.
+6. Map reasoning summary and assistant-message deltas directly to indexed Harness blocks; classify raw input echoes, Codex-owned context, and new provider outputs before producing replay state or trajectory.
 7. On a dynamic tool request, emit validated Harness tool-call blocks, end the model step with `tool-calls`, interrupt the Codex turn, and tear down the process. Harness executes and logs the tools; the next request reconstructs their results from the session.
 8. On successful turn completion, emit usage followed by the terminal finish chunk and tear down the process.
 
@@ -87,7 +87,7 @@ The prompt-ownership invariants remain documented as disproven properties rather
 1. Harness history and the current user input are reconstructed only from the Harness request.
 2. Harness tools are declared as App Server dynamic tools and only the Harness agent loop executes them.
 3. Codex-added prompt and tool layers remain disclosed in documentation and covered by the wire characterization test.
-4. Every Codex-native action lifecycle is emitted as provider-owned `codex-action` trajectory and never represented as a Harness tool call.
+4. Every Codex-native action lifecycle, including raw Code Mode calls without a `ThreadItem` pair, is emitted as provider-owned `codex-action` trajectory and never represented as a Harness tool call.
 5. Reasoning, text, Harness dynamic-tool requests, usage, cancellation, and failures are emitted as live Harness stream events.
 6. Every model-visible Harness input and every provider output needed for replay is present in the Harness session log.
 7. App Server processes, ephemeral threads, and temporary workspaces are settled after every terminal path.
@@ -97,7 +97,7 @@ The prompt-ownership invariants remain documented as disproven properties rather
 1. A text-only request displays reasoning and text before turn completion.
 2. A file-context request displays a Harness read/search call, its logged result, and the final answer in order.
 3. Hostile configurable developer instructions are overridden, project instructions are excluded by the private working directory, and remaining Codex-owned prompt and tool layers stay characterized and disclosed.
-4. A native Codex action appears in the transcript with its Codex action type, lifecycle state, input, and available outcome, without appearing in the Harness tool-call stream.
+4. A native Codex action appears in the transcript with its category, Codex action type, exact protocol event, lifecycle phase, input, and available outcome, without appearing in the Harness tool-call stream; a failed native action does not fail an otherwise completed turn.
 5. Abort, timeout, malformed JSON-RPC, App Server exit, and tool handoff leave no process tree or temporary workspace.
 6. A real local-OAuth Harness run completes a two-step tool round trip and produces a keyless replayable session snapshot.
 7. The packed tarball passes isolated profile installation and the actual web profile renders the same trajectory after restart.
@@ -115,4 +115,4 @@ Each completed stage is committed after its own checks pass.
 
 ## Verification evidence
 
-The keyless wire test runs the pinned CLI against a local Responses endpoint and proves both history injection through an empty turn and the remaining Codex-owned layers. The assembled Harness snapshot fixes the transcript distinction between `codex-action` trajectory and Harness `tool-call` blocks across two model steps. The real local-OAuth test completes the same two-step dynamic-tool round trip through App Server and verifies both process trees have exited.
+The keyless wire test runs the pinned CLI against a local Responses endpoint and proves both history injection through an empty turn and the remaining Codex-owned layers. The assembled Harness snapshot fixes the transcript distinction between `codex-action` trajectory and Harness `tool-call` blocks across two model steps. Mapper tests prove injected history is filtered, Codex-owned context is logged but not reinjected, raw Code Mode call/output pairs are visible, and failed native actions do not fail completed turns. The real local-OAuth test completes the same two-step dynamic-tool round trip through App Server and verifies both process trees have exited.

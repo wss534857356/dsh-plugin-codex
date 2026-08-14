@@ -7,7 +7,9 @@ exports[`assembled Harness transcript > keeps Codex actions distinct from Harnes
       {
         "actionId": "thread-1",
         "actionType": "thread/start",
+        "category": "lifecycle",
         "phase": "completed",
+        "protocolEvent": "thread/start",
         "snapshot": {
           "codexOwnedPromptAndTools": true,
           "instructionSources": [
@@ -28,7 +30,9 @@ exports[`assembled Harness transcript > keeps Codex actions distinct from Harnes
       {
         "actionId": "native-command-1",
         "actionType": "commandExecution",
+        "category": "action",
         "phase": "started",
+        "protocolEvent": "item/started",
         "snapshot": {
           "command": "pwd",
           "id": "native-command-1",
@@ -40,7 +44,9 @@ exports[`assembled Harness transcript > keeps Codex actions distinct from Harnes
       {
         "actionId": "native-command-1",
         "actionType": "item/commandExecution/outputDelta",
+        "category": "action",
         "phase": "updated",
+        "protocolEvent": "item/commandExecution/outputDelta",
         "snapshot": {
           "delta": "C:/private-workdir",
           "itemId": "native-command-1",
@@ -52,7 +58,9 @@ exports[`assembled Harness transcript > keeps Codex actions distinct from Harnes
       {
         "actionId": "native-command-1",
         "actionType": "commandExecution",
+        "category": "action",
         "phase": "completed",
+        "protocolEvent": "item/completed",
         "snapshot": {
           "aggregatedOutput": "C:/private-workdir",
           "command": "pwd",
@@ -79,7 +87,9 @@ exports[`assembled Harness transcript > keeps Codex actions distinct from Harnes
       {
         "actionId": "thread-2",
         "actionType": "thread/start",
+        "category": "lifecycle",
         "phase": "completed",
+        "protocolEvent": "thread/start",
         "snapshot": {
           "codexOwnedPromptAndTools": true,
           "instructionSources": [],

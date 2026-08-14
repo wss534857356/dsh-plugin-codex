@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { CallId, MessageId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import {
+  AppServerEventMapper,
   appServerDynamicTools,
   appServerHistory,
   assertCompletedTurn,
@@ -39,7 +40,18 @@ describe('App Server protocol translation', () => {
           id: MessageId('assistant-1'),
           role: 'assistant',
           source: { kind: 'model', provider: 'other-provider', model: 'other-model' },
-          content: [{ type: 'tool-call', id: callId, name: 'read_file', arguments: '{"path":"a.txt"}' }],
+          content: [
+            {
+              type: 'codex-action',
+              actionId: 'native-1',
+              actionType: 'commandExecution',
+              category: 'action',
+              phase: 'completed',
+              protocolEvent: 'item/completed',
+              snapshot: { command: 'pwd' },
+            },
+            { type: 'tool-call', id: callId, name: 'read_file', arguments: '{"path":"a.txt"}' },
+          ],
         },
         {
           id: MessageId('tool-1'),
@@ -88,12 +100,73 @@ describe('App Server protocol translation', () => {
           kind: 'model',
           provider: 'codex-local',
           model: 'gpt-5.6-sol',
-          replayState: { kind: 'codex-app-server', version: 0, items: [raw] },
+          replayState: { kind: 'codex-app-server', version: 1, items: [raw], contextItems: [] },
         },
         content: [{ type: 'text', text: 'reconstructed text must not replace raw state' }],
       }],
     }))
     expect(history).toEqual([raw])
+  })
+
+  it('separates injected history, Codex context, and outputs across raw responses', () => {
+    const injected = {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: 'hello' }],
+    }
+    const mapper = new AppServerEventMapper([injected])
+    const raw = (item: Record<string, unknown>): CodexAppServerEvent => ({
+      kind: 'notification',
+      method: 'rawResponseItem/completed',
+      params: { threadId: 'thread-1', turnId: 'turn-1', item },
+    })
+    const context = {
+      type: 'message',
+      id: 'context-1',
+      role: 'developer',
+      content: [{ type: 'input_text', text: 'Codex context' }],
+    }
+    const first = {
+      type: 'message',
+      id: 'assistant-1',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'first' }],
+    }
+    const second = {
+      type: 'message',
+      id: 'assistant-2',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'second' }],
+    }
+
+    expect(mapper.accept(raw({
+      ...injected,
+      id: 'provider-added-id',
+      internal_chat_message_metadata_passthrough: { turn_id: 'turn-1' },
+    }))).toEqual([])
+    expect(mapper.accept(raw(context))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'block-end', block: expect.objectContaining({
+        type: 'codex-action',
+        actionType: 'context/injected',
+        category: 'context',
+      }) }),
+    ]))
+    expect(mapper.accept(raw(first))).toEqual([])
+    mapper.accept({
+      kind: 'notification',
+      method: 'rawResponse/completed',
+      params: { threadId: 'thread-1', turnId: 'turn-1', usage: null },
+    })
+    expect(mapper.accept(raw({ ...context, id: 'context-2' }))).toEqual([])
+    expect(mapper.accept(raw(first))).toEqual([])
+    expect(mapper.accept(raw(second))).toEqual([])
+
+    expect(mapper.replayState()).toEqual({
+      kind: 'codex-app-server',
+      version: 1,
+      items: [first, second],
+      contextItems: [context],
+    })
   })
 
   it('maps the exact Harness catalog to dynamic tools', () => {

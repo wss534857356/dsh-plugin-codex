@@ -16,18 +16,20 @@ import type {
 import type { CodexAppServerEvent, JsonValue } from './runner.ts'
 
 const REPLAY_KIND = 'codex-app-server'
-const REPLAY_VERSION = 0
+const REPLAY_VERSION = 1
 
 interface JsonObject {
   readonly [key: string]: unknown
 }
 
-/** Logged provider-owned action or diagnostic snapshot. */
+/** Logged Codex-owned lifecycle, context, action, or diagnostic snapshot. */
 export interface CodexActionBlock {
   readonly type: 'codex-action'
   readonly actionId: string
   readonly actionType: string
-  readonly phase: 'started' | 'updated' | 'completed'
+  readonly category: 'lifecycle' | 'context' | 'action' | 'diagnostic'
+  readonly phase: 'requested' | 'started' | 'updated' | 'completed' | 'failed' | 'declined'
+  readonly protocolEvent: string
   readonly snapshot: JsonValue
 }
 
@@ -42,6 +44,7 @@ export interface CodexReplayState {
   readonly kind: typeof REPLAY_KIND
   readonly version: typeof REPLAY_VERSION
   readonly items: readonly JsonValue[]
+  readonly contextItems: readonly JsonValue[]
 }
 
 /** Validated Harness dynamic-tool call decoded from an App Server callback. */
@@ -86,10 +89,61 @@ function jsonValue(value: unknown, label: string): JsonValue {
 function replayItems(value: unknown): JsonValue[] | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
   const candidate = value as JsonObject
-  if (candidate.kind !== REPLAY_KIND || candidate.version !== REPLAY_VERSION || !Array.isArray(candidate.items)) {
+  if (candidate.kind !== REPLAY_KIND
+    || candidate.version !== REPLAY_VERSION
+    || !Array.isArray(candidate.items)
+    || !Array.isArray(candidate.contextItems)) {
     return undefined
   }
+  candidate.contextItems.forEach((item, index) => { jsonValue(item, `replayState.contextItems[${index}]`) })
   return candidate.items.map((item, index) => jsonValue(item, `replayState.items[${index}]`))
+}
+
+const FINGERPRINT_IGNORED_KEYS = new Set([
+  'internal_chat_message_metadata_passthrough',
+  'phase',
+  'status',
+])
+
+function normalizedFingerprintValue(value: JsonValue, loose: boolean): JsonValue {
+  if (Array.isArray(value)) return value.map(entry => normalizedFingerprintValue(entry, loose))
+  if (value === null || typeof value !== 'object') return value
+  return Object.fromEntries(Object.keys(value).sort().flatMap((key) => {
+    if (FINGERPRINT_IGNORED_KEYS.has(key) || (loose && key === 'id')) return []
+    return [[key, normalizedFingerprintValue(value[key]!, loose)]]
+  }))
+}
+
+function fingerprint(value: JsonValue, loose: boolean): string {
+  return JSON.stringify(normalizedFingerprintValue(value, loose))
+}
+
+function hasResponseItemId(value: JsonValue): boolean {
+  return value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && typeof value.id === 'string'
+}
+
+interface ResponseItem {
+  readonly [key: string]: JsonValue
+  readonly type: string
+}
+
+function responseItem(value: unknown, label: string): ResponseItem {
+  const candidate = jsonValue(value, label)
+  if (candidate === null
+    || typeof candidate !== 'object'
+    || Array.isArray(candidate)
+    || typeof candidate.type !== 'string') {
+    throw new LlmError(`Codex App Server returned invalid ${label}`, 'MALFORMED_RESPONSE')
+  }
+  return candidate as ResponseItem
+}
+
+function rawItemDisposition(value: ResponseItem): 'context' | 'replay' | 'trajectory' {
+  if (value.type === 'message') return value.role === 'assistant' ? 'replay' : 'context'
+  return value.type === 'compaction_trigger' ? 'trajectory' : 'replay'
 }
 
 function argumentsJson(value: string, label: string): string {
@@ -170,7 +224,7 @@ export function appServerHistory(options: GenerateOptions): JsonValue[] {
           text.push(`[reasoning]\n${block.text}`)
           break
         case 'codex-action':
-          text.push(`[codex-action]\n${JSON.stringify(block)}`)
+          // Provider trajectory is durable presentation metadata, not assistant-authored history.
           break
         case 'tool-call':
           flushText()
@@ -250,36 +304,33 @@ interface UsageAccumulator {
   reasoningTokens: number
 }
 
-const NATIVE_ITEM_TYPES = new Set([
-  'hookPrompt',
-  'plan',
-  'commandExecution',
-  'fileChange',
-  'mcpToolCall',
-  'collabAgentToolCall',
-  'subAgentActivity',
-  'webSearch',
-  'imageView',
-  'sleep',
-  'imageGeneration',
-  'enteredReviewMode',
-  'exitedReviewMode',
-  'contextCompaction',
-])
-
-const REPORT_NOTIFICATION_METHODS = new Set([
+const ACTION_NOTIFICATION_METHODS = new Set([
   'hook/started',
   'hook/completed',
   'turn/diff/updated',
   'turn/plan/updated',
   'thread/compacted',
+])
+
+const DIAGNOSTIC_NOTIFICATION_METHODS = new Set([
+  'error',
+  'serverRequest/resolved',
   'model/rerouted',
   'model/verification',
   'model/safetyBuffering/updated',
+  'turn/moderationMetadata',
   'warning',
   'guardianWarning',
   'deprecationNotice',
   'configWarning',
+  'windows/worldWritableWarning',
+  'windowsSandbox/setupCompleted',
+])
+
+const RAW_REQUEST_ITEM_TYPES = new Set([
+  'function_call',
+  'custom_tool_call',
+  'tool_search_call',
 ])
 
 function item(value: unknown, label: string): JsonObject & { readonly type: string; readonly id: string } {
@@ -297,10 +348,37 @@ function stringArray(value: unknown, label: string): string[] {
   return value as string[]
 }
 
+function terminalActionPhase(
+  status: unknown,
+  fallback: CodexActionBlock['phase'],
+): CodexActionBlock['phase'] {
+  if (status === 'failed') return 'failed'
+  if (status === 'declined' || status === 'cancelled' || status === 'canceled') return 'declined'
+  return fallback
+}
+
+function rawActionPhase(value: ResponseItem): CodexActionBlock['phase'] {
+  if (RAW_REQUEST_ITEM_TYPES.has(value.type)) {
+    return terminalActionPhase(value.status, 'requested')
+  }
+  if (value.status === 'inProgress' || value.status === 'in_progress') return 'started'
+  return terminalActionPhase(value.status, 'completed')
+}
+
+type RetainedRawItem =
+  | { readonly kind: 'known' }
+  | { readonly kind: 'context' | 'output' | 'trajectory'; readonly item: ResponseItem }
+
 /** Stateful conversion of one App Server turn to indexed Harness blocks and replay data. */
 export class AppServerEventMapper {
   private readonly open = new Map<string, OpenTextBlock>()
+  private readonly initialHistory: readonly JsonValue[]
+  private readonly harnessToolNames: ReadonlySet<string>
   private readonly rawItems: JsonValue[] = []
+  private readonly contextItems: JsonValue[] = []
+  private readonly contextFingerprints = new Set<string>()
+  private exactBaseline = new Map<string, number>()
+  private looseBaseline = new Map<string, number>()
   private readonly accumulatedUsage: UsageAccumulator = {
     inputTokens: 0,
     outputTokens: 0,
@@ -311,6 +389,92 @@ export class AppServerEventMapper {
   private fallbackUsage: UsageAccumulator | undefined
   private rawUsageSeen = false
   private nextIndex = 0
+  private nextRawAction = 0
+
+  constructor(history: readonly JsonValue[] = [], harnessToolNames: readonly string[] = []) {
+    this.initialHistory = history.map((item, index) => jsonValue(item, `history[${index}]`))
+    this.harnessToolNames = new Set(harnessToolNames)
+    this.resetBaseline()
+  }
+
+  private resetBaseline(): void {
+    this.exactBaseline = new Map()
+    this.looseBaseline = new Map()
+    for (const candidate of [...this.initialHistory, ...this.rawItems]) {
+      const counts = hasResponseItemId(candidate) ? this.exactBaseline : this.looseBaseline
+      const key = fingerprint(candidate, !hasResponseItemId(candidate))
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+  }
+
+  private consumeBaseline(candidate: JsonValue): boolean {
+    const exact = fingerprint(candidate, false)
+    const exactCount = this.exactBaseline.get(exact) ?? 0
+    if (exactCount > 0) {
+      this.exactBaseline.set(exact, exactCount - 1)
+      return true
+    }
+    const loose = fingerprint(candidate, true)
+    const looseCount = this.looseBaseline.get(loose) ?? 0
+    if (looseCount > 0) {
+      this.looseBaseline.set(loose, looseCount - 1)
+      return true
+    }
+    return false
+  }
+
+  private retainRawItem(value: unknown): RetainedRawItem {
+    const candidate = responseItem(value, `raw response item ${this.rawItems.length + this.contextItems.length}`)
+    if (this.consumeBaseline(candidate)) return { kind: 'known' }
+    const disposition = rawItemDisposition(candidate)
+    if (disposition === 'replay') {
+      this.rawItems.push(candidate)
+      return { kind: 'output', item: candidate }
+    }
+    if (disposition === 'trajectory') return { kind: 'trajectory', item: candidate }
+    const key = fingerprint(candidate, true)
+    if (this.contextFingerprints.has(key)) return { kind: 'known' }
+    this.contextFingerprints.add(key)
+    this.contextItems.push(candidate)
+    return { kind: 'context', item: candidate }
+  }
+
+  private rawActionId(value: ResponseItem, params: JsonObject): string {
+    if (typeof value.call_id === 'string' && value.call_id.length > 0) return value.call_id
+    if (typeof value.id === 'string' && value.id.length > 0) return value.id
+    const turn = typeof params.turnId === 'string' ? params.turnId : 'raw-response'
+    return `${turn}:${String(this.nextRawAction++)}`
+  }
+
+  private rawItemAction(params: JsonObject): StreamChunk[] {
+    const retained = this.retainRawItem(params.item)
+    if (retained.kind === 'known') return []
+    const current = retained.item
+    if (retained.kind === 'context') {
+      return this.action(
+        this.rawActionId(current, params),
+        'context/injected',
+        'context',
+        'completed',
+        'rawResponseItem/completed',
+        current,
+      )
+    }
+    if (current.type === 'message' || current.type === 'reasoning') return []
+    if (RAW_REQUEST_ITEM_TYPES.has(current.type)
+      && typeof current.name === 'string'
+      && this.harnessToolNames.has(current.name)) {
+      return []
+    }
+    return this.action(
+      this.rawActionId(current, params),
+      current.type,
+      'action',
+      rawActionPhase(current),
+      'rawResponseItem/completed',
+      current,
+    )
+  }
 
   private atomicBlock(block: ContentBlock): StreamChunk[] {
     const index = this.nextIndex++
@@ -328,14 +492,18 @@ export class AppServerEventMapper {
   private action(
     actionId: string,
     actionType: string,
+    category: CodexActionBlock['category'],
     phase: CodexActionBlock['phase'],
+    protocolEvent: string,
     snapshot: unknown,
   ): StreamChunk[] {
     return this.atomicBlock({
       type: 'codex-action',
       actionId,
       actionType,
+      category,
       phase,
+      protocolEvent,
       snapshot: jsonValue(snapshot, `snapshot for ${actionType}`),
     })
   }
@@ -419,7 +587,7 @@ export class AppServerEventMapper {
   /** Translate one decoded event to zero or more immediately publishable chunks. */
   accept(event: CodexAppServerEvent): StreamChunk[] {
     if (event.kind === 'thread-started') {
-      return this.action(event.threadId, 'thread/start', 'completed', {
+      return this.action(event.threadId, 'thread/start', 'lifecycle', 'completed', 'thread/start', {
         threadId: event.threadId,
         userAgent: event.userAgent,
         instructionSources: event.instructionSources,
@@ -430,18 +598,25 @@ export class AppServerEventMapper {
     if (event.kind === 'server-request') {
       if (event.method === 'item/tool/call') return []
       const actionId = typeof event.params.itemId === 'string' ? event.params.itemId : String(event.id)
-      return this.action(actionId, event.method, 'completed', {
-        params: event.params,
-        resolution: event.resolution,
-      })
+      return this.action(
+        actionId,
+        event.method,
+        'action',
+        event.resolution === 'answered' ? 'completed' : 'declined',
+        event.method,
+        {
+          params: event.params,
+          resolution: event.resolution,
+        },
+      )
     }
     const { method, params } = event
     if (method === 'rawResponseItem/completed') {
-      this.rawItems.push(jsonValue(params.item, `raw response item ${this.rawItems.length}`))
-      return []
+      return this.rawItemAction(params)
     }
     if (method === 'rawResponse/completed') {
       this.addUsage(params.usage, true)
+      this.resetBaseline()
       return []
     }
     if (method === 'thread/tokenUsage/updated') {
@@ -486,26 +661,33 @@ export class AppServerEventMapper {
         return [...summary, ...content].flatMap(text => this.atomicBlock({ type: 'reasoning', text }))
       }
       if (current.type === 'dynamicToolCall' || current.type === 'userMessage') return []
-      if (NATIVE_ITEM_TYPES.has(current.type)) {
-        return this.action(
-          current.id,
-          current.type,
-          method === 'item/started' ? 'started' : 'completed',
-          current,
-        )
-      }
-      return this.action(current.id, current.type, method === 'item/started' ? 'started' : 'completed', current)
+      return this.action(
+        current.id,
+        current.type,
+        'action',
+        method === 'item/started' ? 'started' : terminalActionPhase(current.status, 'completed'),
+        method,
+        current,
+      )
     }
     if (method.startsWith('item/')
       || method.startsWith('command/')
       || method.startsWith('process/')
-      || REPORT_NOTIFICATION_METHODS.has(method)) {
+      || ACTION_NOTIFICATION_METHODS.has(method)
+      || DIAGNOSTIC_NOTIFICATION_METHODS.has(method)) {
       const actionId = typeof params.itemId === 'string'
         ? params.itemId
         : typeof params.turnId === 'string'
           ? params.turnId
           : method
-      return this.action(actionId, method, 'updated', params)
+      return this.action(
+        actionId,
+        method,
+        DIAGNOSTIC_NOTIFICATION_METHODS.has(method) ? 'diagnostic' : 'action',
+        'updated',
+        method,
+        params,
+      )
     }
     return []
   }
@@ -565,6 +747,7 @@ export class AppServerEventMapper {
       kind: REPLAY_KIND,
       version: REPLAY_VERSION,
       items: [...this.rawItems],
+      contextItems: [...this.contextItems],
     }
   }
 }
