@@ -34,7 +34,7 @@ pnpm run check
 Install the generated tarball into a Harness profile:
 
 ```sh
-dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.0.tgz
+dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.1.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
