@@ -12,6 +12,8 @@ The adapter supplies the Harness system text as App Server base instructions, re
 
 Reasoning, assistant text, usage, Codex-owned context, diagnostics, and action lifecycles are converted to Harness stream events as they arrive. Each `codex-action` block carries a `category` (`lifecycle`, `context`, `action`, or `diagnostic`), the parsed `phase`, the exact `protocolEvent`, and the lossless protocol snapshot. Raw Code Mode calls and outcomes are included even when App Server emits no corresponding `ThreadItem`. A failed or declined Codex-native action remains an action outcome and does not fail the Harness model request unless App Server reports that the turn itself failed.
 
+The package also ships a browser plugin. It shadows the stock Assistant cell at a lower slot priority, preserves the standard text, reasoning, image, and generic fallback presentations, and renders `codex-action` blocks as labeled Codex trajectory cards. A card shows the category, interpreted action, phase, exact protocol event, action id, and a collapsible lossless record. `thread/start` explicitly reports layered prompt ownership and discovered instruction-source count; it is not labeled as a Harness tool or request failure.
+
 The `thread/start` block is provider lifecycle disclosure, not evidence that the model performed a native action. Codex-added developer, system, and user messages that are not part of injected Harness history appear as `context/injected` reports. They remain logged for audit but are not fed back as Harness-authored history on the next stateless request.
 
 When App Server requests a declared dynamic tool, the adapter emits a real Harness `tool-call`, ends that model step, and tears down the App Server process without returning a provider-side tool result. A raw Responses call whose name is a declared Harness tool is not also reported as a Codex-native action. Harness owns execution, approval, presentation, and durable logging. The next step injects the logged tool result together with the prior raw provider outputs.
@@ -34,7 +36,7 @@ pnpm run check
 Install the generated tarball into a Harness profile:
 
 ```sh
-dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.1.tgz
+dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.2.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
@@ -102,7 +104,7 @@ Example override:
 
 ## Development
 
-The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound request. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts the implemented ownership split. [ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) records how raw actions, provider context, replay, and Harness tool calls remain distinct.
+The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound request. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts the implemented ownership split. [ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) records how raw actions, provider context, replay, and Harness tool calls remain distinct. [ADR 0004](docs/adr/0004-render-codex-trajectory-in-the-browser-plugin.md) records the client renderer shadow used by the out-of-tree bundle.
 
 ```sh
 pnpm run typecheck

@@ -177,6 +177,9 @@ describe('Codex App Server runner', () => {
       expect.objectContaining({ kind: 'notification', method: 'item/agentMessage/delta' }),
       expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
     ]))
+    expect(messages.find(message => message.method === 'initialize')).toMatchObject({
+      params: { clientInfo: { name: 'deepseek-harness', version: '0.1.2' } },
+    })
     expect(messages.find(message => message.method === 'thread/start')).toMatchObject({
       params: {
         approvalPolicy: 'never',
