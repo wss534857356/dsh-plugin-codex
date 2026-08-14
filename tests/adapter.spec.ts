@@ -365,8 +365,8 @@ describe('CodexAppServerAdapter', () => {
     expect(cached.oneShot).not.toHaveBeenCalled()
     expect(cached.requests).toHaveLength(2)
     expect(cached.requests[0]).toMatchObject({
-      injectedItems: [],
-      input: [{ type: 'text', text: 'hello', text_elements: [] }],
+      injectedItems: [expect.objectContaining({ role: 'user' })],
+      input: [],
     })
     expect(cached.requests[1]).toMatchObject({
       input: [{ type: 'text', text: 'follow up', text_elements: [] }],
@@ -420,7 +420,7 @@ describe('CodexAppServerAdapter', () => {
     expect(cached.thread.dispose).toHaveBeenCalledOnce()
     expect(cached.requests[1]).toMatchObject({
       injectedItems: expect.arrayContaining([expect.objectContaining({ role: 'assistant' })]),
-      input: [{ type: 'text', text: 'continue', text_elements: [] }],
+      input: [],
     })
     await cached.adapter.dispose()
   })

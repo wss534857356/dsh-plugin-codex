@@ -97,14 +97,19 @@ exports[`assembled Harness transcript > keeps Codex actions distinct from Harnes
     "openCount": 1,
     "turns": [
       {
-        "injectedItems": [],
-        "input": [
+        "injectedItems": [
           {
-            "text": "Read notes.txt.",
-            "text_elements": [],
-            "type": "text",
+            "content": [
+              {
+                "text": "Read notes.txt.",
+                "type": "input_text",
+              },
+            ],
+            "role": "user",
+            "type": "message",
           },
         ],
+        "input": [],
       },
       {
         "toolResult": {

@@ -83,11 +83,10 @@ function matchingToolResult(
 }
 
 function coldTurn(request: CodexSessionRequest): CodexAppServerTurnRequest {
-  const input = userInput(request.history.at(-1))
   return {
     ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
-    injectedItems: input === undefined ? request.history : request.history.slice(0, -1),
-    input: input ?? [],
+    injectedItems: request.history,
+    input: [],
     ...(request.signal === undefined ? {} : { signal: request.signal }),
   }
 }

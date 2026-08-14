@@ -91,8 +91,8 @@ describe('CodexSessionCache', () => {
     const first = await cache.begin(request('session-1', [firstUser]))
 
     expect(threads[0]?.requests[0]).toMatchObject({
-      injectedItems: [],
-      input: [{ type: 'text', text: 'first', text_elements: [] }],
+      injectedItems: [firstUser],
+      input: [],
     })
     first.commit([firstUser, firstAnswer])
 
@@ -144,8 +144,8 @@ describe('CodexSessionCache', () => {
     expect(runner.open).toHaveBeenCalledTimes(2)
     expect(threads[0]?.dispose).toHaveBeenCalledOnce()
     expect(threads[1]?.requests[0]).toMatchObject({
-      injectedItems: [],
-      input: [{ type: 'text', text: 'repaired', text_elements: [] }],
+      injectedItems: [user('repaired')],
+      input: [],
     })
     await rebuilt.discard()
   })

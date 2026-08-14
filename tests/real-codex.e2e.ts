@@ -11,8 +11,10 @@ import type {
   FinishReason,
   GenerateOptions,
   Message,
+  TokenUsage,
   ToolSchema,
 } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import * as CodexAppServer from '../src/index.ts'
@@ -21,6 +23,9 @@ const PROVIDER = 'codex-local'
 const MODEL = 'gpt-5.6-sol'
 const ARGUMENT_SENTINEL = 'CODEX_HARNESS_TOOL_OK'
 const RESPONSE_SENTINEL = 'CODEX_HARNESS_ROUNDTRIP_OK'
+const CACHE_SENTINEL = 'CODEX_HARNESS_CACHE_OK'
+const SESSION_ID = SessionId('real-codex-cache-session')
+const SYSTEM = 'Follow the user request exactly. When echo_sentinel is explicitly requested, call it once and answer with its result only. Never call it otherwise.'
 
 const tool: ToolSchema = {
   name: 'echo_sentinel',
@@ -44,15 +49,15 @@ afterEach(async () => {
 async function assemble(
   ctx: Context,
   messages: Message[],
-  system: string,
-): Promise<{ readonly message: Message; readonly finish: FinishReason }> {
+): Promise<{ readonly message: Message; readonly finish: FinishReason; readonly usage?: TokenUsage }> {
   const prepared = await ctx.llm.prepareCall({ provider: PROVIDER, model: MODEL })
   const assembler = new BlockAssembler()
   const request: GenerateOptions = {
     ...prepared.config,
-    system,
+    system: SYSTEM,
     messages,
     tools: [tool],
+    sessionId: SESSION_ID,
   }
   for await (const chunk of prepared.stream(request)) assembler.push(chunk)
   const finish = finishOf(assembler.finish)
@@ -64,6 +69,7 @@ async function assemble(
       replayState: assembler.replayState,
     }),
     finish,
+    ...(assembler.usage === undefined ? {} : { usage: assembler.usage }),
   }
 }
 
@@ -90,7 +96,7 @@ function responseText(message: Message): string {
 }
 
 describe('real locally authenticated Codex bridge', () => {
-  it('completes one Harness-owned tool round trip and leaves no process tree behind', async () => {
+  it('reuses one thread, reports a provider cache hit, and leaves no process tree behind', async () => {
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LlmRuntime)
@@ -114,11 +120,7 @@ describe('real locally authenticated Codex bridge', () => {
         text: `Request echo_sentinel with value ${ARGUMENT_SENTINEL}. Do not answer directly.`,
       }],
     })
-    const first = await assemble(
-      ctx,
-      [user],
-      `You are a deterministic integration test. Request echo_sentinel exactly once with value ${ARGUMENT_SENTINEL}.`,
-    )
+    const first = await assemble(ctx, [user])
     expect(first.finish, JSON.stringify(first.message.content, null, 2)).toEqual({ kind: 'tool-calls' })
     expect(first.message.content).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'codex-action', actionType: 'thread/start' }),
@@ -147,15 +149,32 @@ describe('real locally authenticated Codex bridge', () => {
       content: [{ type: 'text', text: RESPONSE_SENTINEL }],
       isError: false,
     })
-    const second = await assemble(
-      ctx,
-      [user, first.message, result],
-      `After the echo_sentinel result arrives, answer with exactly ${RESPONSE_SENTINEL} and do not request another tool.`,
-    )
+    const second = await assemble(ctx, [user, first.message, result])
     expect(second.finish).toEqual({ kind: 'stop' })
     expect(responseText(second.message).trim()).toBe(RESPONSE_SENTINEL)
 
-    expect(handles).toHaveLength(2)
+    const followUp = createUserMessage({
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: `Reply with exactly ${CACHE_SENTINEL}. Do not use a tool.` }],
+    })
+    const third = await assemble(ctx, [user, first.message, result, second.message, followUp])
+    expect(third.finish).toEqual({ kind: 'stop' })
+    expect(responseText(third.message).trim()).toBe(CACHE_SENTINEL)
+    const cacheEvidence = {
+      handles: handles.length,
+      firstUsage: first.usage,
+      secondUsage: second.usage,
+      thirdUsage: third.usage,
+      thirdActions: third.message.content.flatMap(block => block.type === 'codex-action'
+        ? [{ type: block.actionType, event: block.protocolEvent }]
+        : []),
+    }
+    expect(third.usage?.cacheReadTokens ?? 0, JSON.stringify(cacheEvidence, null, 2)).toBeGreaterThan(0)
+
+    expect(handles).toHaveLength(1)
+    await ctx.fiber.dispose()
+    const contextIndex = contexts.indexOf(ctx)
+    if (contextIndex >= 0) contexts.splice(contextIndex, 1)
     for (const handle of handles) await expect(handle.waitForExit()).resolves.toBe(true)
   })
 })
