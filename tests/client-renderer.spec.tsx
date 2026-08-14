@@ -53,7 +53,7 @@ describe('Codex Assistant renderer', () => {
     expect(actionSummary(action!, t)).toContain('分层共治')
     expect(actionSummary(action!, t)).toContain('1 个指令源')
 
-    const html = renderToStaticMarkup(<CodexActionRow action={action!} t={t} />)
+    const html = renderToStaticMarkup(<CodexActionRow active={false} action={action!} t={t} />)
     expect(html).toContain('data-codex-action="thread/start"')
     expect(html).toContain('data-disclosure-row="true"')
     expect(html).toContain('data-state="done"')
@@ -64,6 +64,47 @@ describe('Codex Assistant renderer', () => {
     expect(detailsHtml).toContain('协议事件')
     expect(detailsHtml).toContain('019ffe6a-2b42-7141-8f98-f6c6b4550027')
     expect(detailsHtml).toContain('aria-label="完整 Codex 协议记录"')
+  })
+
+  it.each([
+    { phase: 'requested', active: true, state: 'ongoing' },
+    { phase: 'requested', active: false, state: 'done' },
+    { phase: 'started', active: true, state: 'ongoing' },
+    { phase: 'started', active: false, state: 'done' },
+    { phase: 'updated', active: true, state: 'done' },
+  ] as const)('maps $phase with active=$active to $state', ({ phase, active, state }) => {
+    const action = codexActionView({ ...lifecycleBlock(), phase })
+    const html = renderToStaticMarkup(<CodexActionRow active={active} action={action!} t={t} />)
+    expect(html).toContain(`data-state="${state}"`)
+  })
+
+  it('settles a requested action when its matching outcome is already present', () => {
+    const requested = {
+      ...lifecycleBlock(),
+      actionId: 'native-call-1',
+      actionType: 'custom_tool_call',
+      category: 'action',
+      phase: 'requested',
+    } satisfies CodexActionBlock
+    const completed = {
+      ...lifecycleBlock(),
+      actionId: 'native-call-1',
+      actionType: 'custom_tool_call_output',
+      category: 'action',
+      phase: 'completed',
+    } satisfies CodexActionBlock
+    const html = renderToStaticMarkup(
+      <CodexAssistantBody
+        blocks={[
+          { kind: 'other', block: requested },
+          { kind: 'other', block: completed },
+        ]}
+        streaming
+        t={t}
+      />,
+    )
+    expect(html).not.toContain('data-state="ongoing"')
+    expect(html.match(/data-state="done"/gu)).toHaveLength(2)
   })
 
   it('specializes codex-action while preserving the generic fallback', () => {

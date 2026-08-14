@@ -114,11 +114,11 @@ function actionTitle(actionType: string, t: CodexTranslate): string {
   }
 }
 
-function phaseState(phase: CodexActionBlock['phase']): StateDotState {
+function phaseState(phase: CodexActionBlock['phase'], active: boolean): StateDotState {
   switch (phase) {
     case 'requested':
-    case 'started':
-    case 'updated': return 'ongoing'
+    case 'started': return active ? 'ongoing' : 'done'
+    case 'updated':
     case 'completed': return 'done'
     case 'failed': return 'error'
     case 'declined': return 'warning'
@@ -172,7 +172,15 @@ export function CodexActionDetails({ action, t }: { action: CodexActionView; t: 
 }
 
 /** Harness-native compact row for one truthful Codex-native trajectory record. */
-export function CodexActionRow({ action, t }: { action: CodexActionView; t: CodexTranslate }) {
+export function CodexActionRow({
+  active,
+  action,
+  t,
+}: {
+  active: boolean
+  action: CodexActionView
+  t: CodexTranslate
+}) {
   const [expanded, setExpanded] = useState(false)
   return (
     <div
@@ -185,7 +193,7 @@ export function CodexActionRow({ action, t }: { action: CodexActionView; t: Code
       <DisclosureRow
         rowClassName={css.actionHeader}
         titleClassName={css.actionTitle}
-        icon={<StateDot state={phaseState(action.phase)} />}
+        icon={<StateDot state={phaseState(action.phase, active)} />}
         title={actionTitle(action.actionType, t)}
         open={expanded}
         expandable
@@ -273,6 +281,16 @@ export const CodexAssistantBody = memo(function CodexAssistantBody({
     || blocks.some(block => block.kind !== 'tool-call')
   if (!hasVisible) return null
 
+  const settledActionIds = new Set<string>()
+  for (const block of blocks) {
+    if (block.kind !== 'other') continue
+    const action = codexActionView(block.block)
+    if (action === undefined) continue
+    if (action.phase === 'completed' || action.phase === 'failed' || action.phase === 'declined') {
+      settledActionIds.add(action.actionId)
+    }
+  }
+
   const rendered: ReactNode[] = []
   for (let index = 0; index < blocks.length; index += 1) {
     const block = blocks[index]
@@ -309,7 +327,14 @@ export const CodexAssistantBody = memo(function CodexAssistantBody({
       case 'other': {
         const action = codexActionView(block.block)
         rendered.push(action !== undefined
-          ? <CodexActionRow key={index} action={action} t={t} />
+          ? (
+              <CodexActionRow
+                key={index}
+                active={streaming && !settledActionIds.has(action.actionId)}
+                action={action}
+                t={t}
+              />
+            )
           : (
               <JsonBlock
                 key={index}
