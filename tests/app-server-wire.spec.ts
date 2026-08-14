@@ -11,6 +11,8 @@ const HARNESS_SYSTEM = 'HARNESS_SYSTEM_SENTINEL\nOnly Harness instructions may c
 const HARNESS_TOOL = 'harness_probe'
 const HARNESS_TOOL_SENTINEL = 'HARNESS_TOOL_SENTINEL'
 const HOSTILE_CONFIG_SENTINEL = 'HOSTILE_CODEX_CONFIG_SENTINEL'
+const TOOL_CALL_ID = 'harness-call-1'
+const TOOL_RESULT_SENTINEL = 'HARNESS_TOOL_RESULT_SENTINEL'
 const MODEL = 'gpt-5.6-sol'
 
 interface CapturedRequest {
@@ -126,7 +128,7 @@ async function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 describe('Codex App Server wire ownership', () => {
-  it('retains Codex-owned instructions and tools after every supported isolation control', { timeout: 30_000 }, async () => {
+  it('replays injected history through an empty turn while retaining Codex-owned layers', { timeout: 30_000 }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-codex-wire-proof-'))
     const home = join(root, 'codex-home')
     const workspace = join(root, 'workspace')
@@ -268,18 +270,61 @@ describe('Codex App Server wire ownership', () => {
     const thread = object(started.thread, 'thread/start thread')
     expect(started.instructionSources ?? []).toEqual([])
 
+    await client.request('thread/inject_items', {
+      threadId: String(thread.id),
+      items: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'USER_REQUEST_SENTINEL' }],
+        },
+        {
+          type: 'function_call',
+          call_id: TOOL_CALL_ID,
+          name: HARNESS_TOOL,
+          arguments: '{"value":"from-history"}',
+        },
+        {
+          type: 'function_call_output',
+          call_id: TOOL_CALL_ID,
+          output: TOOL_RESULT_SENTINEL,
+        },
+      ],
+    })
     await client.request('turn/start', {
       threadId: String(thread.id),
-      input: [{ type: 'text', text: 'USER_REQUEST_SENTINEL' }],
+      input: [],
     })
     const capturedRequest = await captured.promise
     const request = object(capturedRequest.body, 'captured Responses request')
     expect(capturedRequest.url).toBe('/v1/responses')
     expect(request.instructions).toBeUndefined()
+    expect(request.input).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'message',
+        role: 'user',
+        content: expect.arrayContaining([
+          expect.objectContaining({ type: 'input_text', text: 'USER_REQUEST_SENTINEL' }),
+        ]),
+      }),
+      expect.objectContaining({
+        type: 'function_call',
+        call_id: TOOL_CALL_ID,
+        name: HARNESS_TOOL,
+        arguments: '{"value":"from-history"}',
+      }),
+      expect.objectContaining({
+        type: 'function_call_output',
+        call_id: TOOL_CALL_ID,
+        output: TOOL_RESULT_SENTINEL,
+      }),
+    ]))
 
     const wire = JSON.stringify(request)
     expect(wire).toContain('HARNESS_SYSTEM_SENTINEL')
     expect(wire).toContain('USER_REQUEST_SENTINEL')
+    expect(wire).toContain(TOOL_CALL_ID)
+    expect(wire).toContain(TOOL_RESULT_SENTINEL)
     expect(wire).toContain(HARNESS_TOOL)
     expect(wire).toContain(HARNESS_TOOL_SENTINEL)
     expect(wire).not.toContain(HOSTILE_CONFIG_SENTINEL)
