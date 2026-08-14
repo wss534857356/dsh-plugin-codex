@@ -24,6 +24,10 @@ _Avoid_: Codex tool execution, tool proxying
 A command, file change, search, MCP call, or other action owned and executed by the Codex runtime instead of Harness.
 _Avoid_: Provider tool call
 
+**Codex action report**:
+A logged lifecycle snapshot of a Codex-native action, including its Codex action type, state, input, and available outcome. It is provider trajectory, not a request for Harness tool execution.
+_Avoid_: Harness tool call, tool result
+
 **Client instruction layer**:
 The Codex instructions and configuration that a local integration can control before the request reaches OpenAI. OpenAI service-side policies are outside this layer.
 _Avoid_: Entire model prompt, server prompt

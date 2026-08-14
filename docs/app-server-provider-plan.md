@@ -13,7 +13,7 @@ The proof boundary is the decoded request emitted by the pinned Codex client. Th
 3. Every history item sent to Codex is reconstructed from logged Harness messages.
 4. The model-facing tool catalog equals the Harness `GenerateOptions.tools` catalog, and only the Harness agent loop executes requested tools.
 5. Reasoning summaries, assistant text, tool calls, usage, cancellation, and failures are converted to Harness stream events as they occur.
-6. A Codex-native action is a protocol violation. The request fails closed instead of allowing an unlogged command, file change, search, or MCP call.
+6. A Codex-native action remains provider-owned. Its lifecycle and outcome are logged and displayed as `codex-action` content blocks, never as Harness tool calls.
 7. A request and its Codex process tree leave no provider thread, temporary workspace, or child process after completion, handoff, cancellation, timeout, or failure.
 
 ## Request lifecycle
@@ -54,7 +54,7 @@ Runtime checks complement the capture test:
 - `instructionSources` must be empty;
 - every dynamic call must name an offered Harness tool and carry object-valued JSON arguments;
 - only the documented reasoning, assistant-message, dynamic-tool, usage, and lifecycle events are accepted;
-- native action items fail with a stable protocol error;
+- native action items become provider-owned trajectory blocks and never generate Harness tool execution events;
 - the installed Codex version and generated protocol schema must match the pinned baseline.
 
 ## Result
@@ -87,7 +87,7 @@ The prompt-ownership invariants remain documented as disproven properties rather
 1. Harness history and the current user input are reconstructed only from the Harness request.
 2. Harness tools are declared as App Server dynamic tools and only the Harness agent loop executes them.
 3. Codex-added prompt and tool layers remain disclosed in documentation and covered by the wire characterization test.
-4. Any Codex-native action fails the request before it can be represented as a successful Harness tool call.
+4. Every Codex-native action lifecycle is emitted as provider-owned `codex-action` trajectory and never represented as a Harness tool call.
 5. Reasoning, text, Harness dynamic-tool requests, usage, cancellation, and failures are emitted as live Harness stream events.
 6. Every model-visible Harness input and every provider output needed for replay is present in the Harness session log.
 7. App Server processes, ephemeral threads, and temporary workspaces are settled after every terminal path.
@@ -97,7 +97,7 @@ The prompt-ownership invariants remain documented as disproven properties rather
 1. A text-only request displays reasoning and text before turn completion.
 2. A file-context request displays a Harness read/search call, its logged result, and the final answer in order.
 3. Hostile Codex configuration and project instructions do not appear in the captured outbound request.
-4. An attempted native Codex action fails without modifying the workspace or reaching the network.
+4. A native Codex action appears in the transcript with its Codex action type, lifecycle state, input, and available outcome, without appearing in the Harness tool-call stream.
 5. Abort, timeout, malformed JSON-RPC, App Server exit, and tool handoff leave no process tree or temporary workspace.
 6. A real local-OAuth Harness run completes a two-step tool round trip and produces a keyless replayable session snapshot.
 7. The packed tarball passes isolated profile installation and the actual web profile renders the same trajectory after restart.
