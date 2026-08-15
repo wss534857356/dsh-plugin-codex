@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { CallId, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { CodexAppServerAdapter } from '../src/adapter.ts'
+import type { CodexImageStorePort } from '../src/images.ts'
 import type {
   CodexAppServerEvent,
   CodexAppServerRequest,
@@ -76,7 +78,10 @@ function answerEvents(
   ]
 }
 
-function instance(runner: CodexAppServerRunnerPort): CodexAppServerAdapter {
+function instance(
+  runner: CodexAppServerRunnerPort,
+  resolveAttachments: () => CodexImageStorePort | undefined = () => undefined,
+): CodexAppServerAdapter {
   return new CodexAppServerAdapter({
     provider: 'codex-local',
     displayName: 'Codex local',
@@ -92,11 +97,15 @@ function instance(runner: CodexAppServerRunnerPort): CodexAppServerAdapter {
     maxCachedSessions: 8,
     sessionIdleTimeoutMs: 600_000,
     onCleanupError: vi.fn(),
+    resolveAttachments,
     runner,
   })
 }
 
-function adapter(events: readonly CodexAppServerEvent[]) {
+function adapter(
+  events: readonly CodexAppServerEvent[],
+  resolveAttachments: () => CodexImageStorePort | undefined = () => undefined,
+) {
   const stream = vi.fn((input: CodexAppServerRequest): AsyncIterable<CodexAppServerEvent> => {
     return (async function * () {
       void input
@@ -109,7 +118,7 @@ function adapter(events: readonly CodexAppServerEvent[]) {
   }
   return {
     stream,
-    adapter: instance(runner),
+    adapter: instance(runner, resolveAttachments),
   }
 }
 
@@ -317,7 +326,7 @@ describe('CodexAppServerAdapter', () => {
       reason: { kind: 'stop' },
       replayState: {
         kind: 'codex-app-server',
-        version: 3,
+        version: 4,
         items: [
           expect.objectContaining({ type: 'reasoning' }),
           expect.objectContaining({ type: 'message' }),
@@ -329,6 +338,91 @@ describe('CodexAppServerAdapter', () => {
         })],
       },
     })
+  })
+
+  it('publishes native generated images without retaining their base64 in blocks or replay state', async () => {
+    const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+    const data = Buffer.from(base64, 'base64')
+    const ref = {
+      attachmentId: AttachmentId('sha256:image-1'),
+      mediaType: 'image/png' as const,
+      bytes: data.byteLength,
+      width: 1,
+      height: 1,
+      name: 'generated.png',
+    }
+    const store: CodexImageStorePort = {
+      imageLimits: {
+        maxImageBytes: 5 * 1024 * 1024,
+        maxImagesPerMessage: 8,
+        maxMessageImageBytes: 20 * 1024 * 1024,
+        maxImagePixels: 20_000_000,
+        mediaTypes: ['image/png'],
+      },
+      validateImage: vi.fn(async () => {}),
+      saveImage: vi.fn(async () => ref),
+      readImage: vi.fn(async value => ({ ref: value, data })),
+    }
+    const leading: CodexAppServerEvent[] = [
+      {
+        kind: 'notification',
+        method: 'item/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-image',
+          item: {
+            type: 'imageGeneration',
+            id: 'image-1',
+            status: 'completed',
+            result: base64,
+            savedPath: 'C:\\Users\\test\\.codex\\generated_images\\generated.png',
+          },
+        },
+      },
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-image',
+          item: {
+            type: 'function_call_output',
+            id: 'output-1',
+            call_id: 'call-1',
+            output: [
+              { type: 'input_text', text: 'generated' },
+              { type: 'input_image', image_url: `data:image/png;base64,${base64}`, detail: 'high' },
+            ],
+          },
+        },
+      },
+    ]
+    const { adapter: instance } = adapter(answerEvents('image', 'created', leading), () => store)
+    const chunks = await collect(instance, request())
+
+    expect(chunks).toContainEqual({
+      type: 'block-end',
+      index: expect.any(Number),
+      block: { type: 'image', attachment: ref },
+    })
+    const finish = chunks.findLast(chunk => chunk.type === 'finish')
+    expect(finish).toMatchObject({
+      replayState: {
+        version: 4,
+        items: [
+          expect.objectContaining({
+            type: 'function_call_output',
+            output: expect.arrayContaining([expect.objectContaining({
+              type: 'input_image',
+              image_url: expect.objectContaining({ kind: 'dsh-image-attachment' }),
+            })]),
+          }),
+          expect.objectContaining({ type: 'message', role: 'assistant' }),
+        ],
+      },
+    })
+    expect(JSON.stringify(chunks)).not.toContain(base64)
+    expect(store.saveImage).toHaveBeenCalledOnce()
   })
 
   it('reuses one session thread and appends the next user message through turn input', async () => {

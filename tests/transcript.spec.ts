@@ -237,6 +237,7 @@ describe('assembled Harness transcript', () => {
       maxCachedSessions: 8,
       sessionIdleTimeoutMs: 600_000,
       onCleanupError: vi.fn(),
+      resolveAttachments: () => undefined,
       runner,
     })
     ctx.llm.registerAdapter([PROVIDER], adapter)

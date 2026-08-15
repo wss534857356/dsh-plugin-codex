@@ -91,6 +91,7 @@ The prompt-ownership invariants remain documented as disproven properties rather
 5. Reasoning, text, Harness dynamic-tool requests, usage, cancellation, and failures are emitted as live Harness stream events.
 6. Every model-visible Harness input and every provider output needed for replay is present in the Harness session log.
 7. App Server processes, ephemeral threads, and temporary workspaces are settled after every terminal path.
+8. Native generated images are durable Harness attachments, appear through the standard image block, and leave no inline base64 in action or replay records.
 
 ## Acceptance scenarios
 
@@ -101,6 +102,7 @@ The prompt-ownership invariants remain documented as disproven properties rather
 5. Abort, timeout, malformed JSON-RPC, App Server exit, and tool handoff leave no process tree or temporary workspace.
 6. A real local-OAuth Harness run completes a two-step tool round trip and produces a keyless replayable session snapshot.
 7. The packed tarball passes isolated profile installation and the actual web profile renders the same trajectory after restart.
+8. A native image-generation turn emits one durable Harness image, and cold replay restores the provider image from its attachment marker without republishing it.
 
 ## Delivery stages
 

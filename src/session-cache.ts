@@ -33,7 +33,10 @@ export interface CodexSessionRequest {
   readonly sessionId: string
   readonly epoch: JsonValue
   readonly thread: Omit<CodexAppServerThreadRequest, 'signal'>
+  /** Externalized history used only to prove an exact warm continuation. */
   readonly history: readonly JsonValue[]
+  /** Resolve provider-ready history only when a new thread must be reconstructed. */
+  readonly loadInjectedHistory: () => Promise<readonly JsonValue[]>
   readonly reasoningEffort?: string
   readonly toolResults: readonly CodexAppServerToolResult[]
   readonly signal?: AbortSignal
@@ -82,10 +85,10 @@ function matchingToolResult(
   return results.find(result => result.callId === callId && result.output === item.output)
 }
 
-function coldTurn(request: CodexSessionRequest): CodexAppServerTurnRequest {
+async function coldTurn(request: CodexSessionRequest): Promise<CodexAppServerTurnRequest> {
   return {
     ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
-    injectedItems: request.history,
+    injectedItems: await request.loadInjectedHistory(),
     input: [],
     ...(request.signal === undefined ? {} : { signal: request.signal }),
   }
@@ -156,7 +159,7 @@ class SessionLease {
     if (this.state.kind !== 'active') {
       throw new LlmError('Codex session lease was disposed while opening', 'ABORTED')
     }
-    return this.step(thread, coldTurn(request))
+    return this.step(thread, await coldTurn(request))
   }
 
   async tryResume(request: CodexSessionRequest): Promise<CodexSessionStep | undefined> {

@@ -14,6 +14,8 @@ import type {
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { HARNESS_TOOL_NAMESPACE } from './identifiers.ts'
+import { NativeImageBridge } from './images.ts'
+import type { CodexImageStorePort } from './images.ts'
 import {
   AppServerEventMapper,
   appServerDynamicTools,
@@ -52,6 +54,7 @@ export interface CodexAdapterOptions {
   readonly maxCachedSessions: number
   readonly sessionIdleTimeoutMs: number
   readonly onCleanupError: (error: unknown) => void
+  readonly resolveAttachments: () => CodexImageStorePort | undefined
   readonly runner: CodexAppServerRunnerPort
 }
 
@@ -141,6 +144,8 @@ export class CodexAppServerAdapter extends LlmAdapter {
       )
     }
     const history = appServerHistory(options)
+    const images = new NativeImageBridge(this.options.resolveAttachments)
+    images.rememberHistory(history)
     const dynamicTools = appServerDynamicTools(options.tools, options.messages)
     const mapper = new AppServerEventMapper(history, options.tools?.map(tool => tool.name))
     const reasoningEffort = options.reasoningEffort === undefined
@@ -149,12 +154,13 @@ export class CodexAppServerAdapter extends LlmAdapter {
     let cached: CodexSessionStep | undefined
     let events: AsyncIterable<CodexAppServerEvent>
     if (options.sessionId === undefined || options.purpose !== undefined) {
+      const injectedHistory = await images.hydrateHistory(history, options.signal)
       events = this.options.runner.stream({
         model: options.model,
         modelProvider: this.options.modelProvider,
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
         system: options.system ?? '',
-        history,
+        history: injectedHistory,
         dynamicTools,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       })
@@ -169,6 +175,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
           dynamicTools,
         },
         history,
+        loadInjectedHistory: () => images.hydrateHistory(history, options.signal),
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
         toolResults: appServerToolResults(options),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -178,12 +185,16 @@ export class CodexAppServerAdapter extends LlmAdapter {
     let retained = false
     try {
       for await (const event of events) {
-        for (const chunk of mapper.accept(event)) yield chunk
-        if (event.kind === 'server-request'
-          && event.method === 'item/tool/call'
-          && event.params.namespace === HARNESS_TOOL_NAMESPACE) {
+        const projected = await images.externalize(event)
+        for (const chunk of mapper.accept(projected.event)) yield chunk
+        for (const image of projected.images) {
+          for (const chunk of mapper.image(image)) yield chunk
+        }
+        if (projected.event.kind === 'server-request'
+          && projected.event.method === 'item/tool/call'
+          && projected.event.params.namespace === HARNESS_TOOL_NAMESPACE) {
           for (const chunk of mapper.closeOpen()) yield chunk
-          const call = harnessToolCall(event, options.tools, options.messages)
+          const call = harnessToolCall(projected.event, options.tools, options.messages)
           for (const chunk of mapper.toolCall(call)) yield chunk
           const usage = mapper.usage()
           if (usage !== undefined) yield { type: 'usage', usage }
@@ -196,9 +207,9 @@ export class CodexAppServerAdapter extends LlmAdapter {
           }
           return
         }
-        if (event.kind === 'notification' && event.method === 'turn/completed') {
+        if (projected.event.kind === 'notification' && projected.event.method === 'turn/completed') {
           for (const chunk of mapper.closeOpen()) yield chunk
-          assertCompletedTurn(event)
+          assertCompletedTurn(projected.event)
           const usage = mapper.usage()
           if (usage !== undefined) yield { type: 'usage', usage }
           const replayState = mapper.replayState()

@@ -138,7 +138,7 @@ describe('real locally authenticated Codex bridge', () => {
     ]))
     expect(first.message.source).toMatchObject({
       kind: 'model',
-      replayState: { kind: 'codex-app-server', version: 3 },
+      replayState: { kind: 'codex-app-server', version: 4 },
     })
     const call = toolCall(first.message)
     expect(call.name).toBe(tool.name)

@@ -322,7 +322,7 @@ export class CodexAppServerRunner implements CodexAppServerRunnerPort {
         clientInfo: {
           name: 'deepseek-harness',
           title: 'DeepSeek Harness',
-          version: '0.1.12',
+          version: '0.1.13',
         },
         capabilities: {
           experimentalApi: true,

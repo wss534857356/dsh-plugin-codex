@@ -13,6 +13,7 @@ import type {
   TokenUsage,
   ToolSchema,
 } from '@deepseek-ai/dsh-llm'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type {
   CodexAppServerEvent,
   CodexAppServerToolResult,
@@ -21,7 +22,7 @@ import type {
 import { HARNESS_TOOL_NAMESPACE } from './identifiers.ts'
 
 const REPLAY_KIND = 'codex-app-server'
-const REPLAY_VERSION = 3
+const REPLAY_VERSION = 4
 const HARNESS_SKILL_NAME = 'skill'
 const HARNESS_SKILL_TOOL_NAME = 'harness_skill'
 const NATIVE_COMPACTION_ITEM_TYPES = new Set([
@@ -904,6 +905,11 @@ export class AppServerEventMapper {
   /** Close any delta block left open at a terminal protocol event. */
   closeOpen(): StreamChunk[] {
     return [...this.open.keys()].flatMap(key => this.close(key))
+  }
+
+  /** Emit one durable Harness image attachment produced by a Codex-native action. */
+  image(attachment: ImageAttachmentRef): StreamChunk[] {
+    return this.atomicBlock({ type: 'image', attachment })
   }
 
   /** Emit one Harness-owned tool request and retain an injectable raw call item. */

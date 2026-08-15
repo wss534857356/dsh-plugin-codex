@@ -149,7 +149,7 @@ describe('App Server protocol translation', () => {
           kind: 'model',
           provider: 'codex-local',
           model: 'gpt-5.6-sol',
-          replayState: { kind: 'codex-app-server', version: 3, items: [raw], contextItems: [] },
+          replayState: { kind: 'codex-app-server', version: 4, items: [raw], contextItems: [] },
         },
         content: [{ type: 'text', text: 'reconstructed text must not replace raw state' }],
       }],
@@ -174,7 +174,7 @@ describe('App Server protocol translation', () => {
           model: 'gpt-5.6-sol',
           replayState: {
             kind: 'codex-app-server',
-            version: 3,
+            version: 4,
             items: [
               { type: 'compaction', encrypted_content: 'opaque' },
               { type: 'context_compaction', encrypted_content: 'opaque-context' },
@@ -222,7 +222,7 @@ describe('App Server protocol translation', () => {
       kind: 'model' as const,
       provider: 'codex-local',
       model: 'gpt-5.6-sol',
-      replayState: { kind: 'codex-app-server', version: 3, items, contextItems: [] },
+      replayState: { kind: 'codex-app-server', version: 4, items, contextItems: [] },
     })
 
     const history = appServerHistory(options({
@@ -337,7 +337,7 @@ describe('App Server protocol translation', () => {
     expect(mapper.accept(echoed)).toEqual([])
     expect(mapper.replayState()).toEqual({
       kind: 'codex-app-server',
-      version: 3,
+      version: 4,
       items: [],
       contextItems: [],
     })
@@ -398,7 +398,7 @@ describe('App Server protocol translation', () => {
 
     expect(mapper.replayState()).toEqual({
       kind: 'codex-app-server',
-      version: 3,
+      version: 4,
       items: [first, second],
       contextItems: [context],
     })

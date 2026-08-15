@@ -74,6 +74,7 @@ function request(
       dynamicTools: [],
     },
     history,
+    loadInjectedHistory: () => Promise.resolve(history),
     toolResults: [],
     ...overrides,
   }
@@ -88,16 +89,22 @@ describe('CodexSessionCache', () => {
     const { cache, runner, threads } = fixture()
     const firstUser = user('first')
     const firstAnswer = assistant('answer')
-    const first = await cache.begin(request('session-1', [firstUser]))
+    const firstLoad = vi.fn(async () => [firstUser])
+    const first = await cache.begin(request('session-1', [firstUser], { loadInjectedHistory: firstLoad }))
 
+    expect(firstLoad).toHaveBeenCalledOnce()
     expect(threads[0]?.requests[0]).toMatchObject({
       injectedItems: [firstUser],
       input: [],
     })
     first.commit([firstUser, firstAnswer])
 
-    const second = await cache.begin(request('session-1', [firstUser, firstAnswer, user('follow up')]))
+    const warmLoad = vi.fn(async () => [firstUser, firstAnswer, user('follow up')])
+    const second = await cache.begin(request('session-1', [firstUser, firstAnswer, user('follow up')], {
+      loadInjectedHistory: warmLoad,
+    }))
     expect(runner.open).toHaveBeenCalledOnce()
+    expect(warmLoad).not.toHaveBeenCalled()
     expect(threads[0]?.requests[1]).toMatchObject({
       input: [{ type: 'text', text: 'follow up', text_elements: [] }],
     })

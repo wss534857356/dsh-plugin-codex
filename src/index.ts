@@ -1,6 +1,7 @@
 /** DeepSeek Harness main-model provider backed by the locally authenticated Codex App Server. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-session'
 import z from '@deepseek-ai/schemastery'
 import { CodexAppServerAdapter } from './adapter.ts'
@@ -10,6 +11,8 @@ import { CodexAppServerRunner } from './runner.ts'
 
 export { CodexAppServerAdapter } from './adapter.ts'
 export type { CodexAdapterOptions, CodexModel } from './adapter.ts'
+export { NativeImageBridge } from './images.ts'
+export type { CodexImageStorePort, ExternalizedCodexEvent } from './images.ts'
 export {
   AppServerEventMapper,
   appServerDynamicTools,
@@ -268,6 +271,7 @@ export function apply(ctx: Context, config: Config): void {
     maxCachedSessions: resolved.maxCachedSessions,
     sessionIdleTimeoutMs: resolved.sessionIdleTimeoutMs,
     onCleanupError: reportCleanupError,
+    resolveAttachments: () => ctx.get('attachments'),
     runner,
   })
   ctx.llm.registerAdapter([resolved.provider], adapter)
