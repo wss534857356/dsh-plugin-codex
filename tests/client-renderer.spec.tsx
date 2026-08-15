@@ -56,7 +56,8 @@ describe('Codex Assistant renderer', () => {
     const html = renderToStaticMarkup(<CodexActionRow active={false} action={action!} t={t} />)
     expect(html).toContain('data-codex-action="thread/start"')
     expect(html).toContain('data-disclosure-row="true"')
-    expect(html).toContain('data-state="done"')
+    expect(html).toContain('<svg')
+    expect(html).not.toContain('data-state="done"')
     expect(html).toContain('启动原生会话')
     expect(html).not.toContain('未知内容块')
 
@@ -68,13 +69,31 @@ describe('Codex Assistant renderer', () => {
 
   it.each([
     { phase: 'requested', active: true, state: 'ongoing' },
-    { phase: 'requested', active: false, state: 'done' },
     { phase: 'started', active: true, state: 'ongoing' },
-    { phase: 'started', active: false, state: 'done' },
-    { phase: 'updated', active: true, state: 'done' },
-  ] as const)('maps $phase with active=$active to $state', ({ phase, active, state }) => {
+  ] as const)('maps active $phase to $state', ({ phase, active, state }) => {
     const action = codexActionView({ ...lifecycleBlock(), phase })
     const html = renderToStaticMarkup(<CodexActionRow active={active} action={action!} t={t} />)
+    expect(html).toContain(`data-state="${state}"`)
+  })
+
+  it.each([
+    { actionType: 'thread/start', category: 'lifecycle', phase: 'completed' },
+    { actionType: 'context/injected', category: 'context', phase: 'completed' },
+    { actionType: 'turn/plan/updated', category: 'action', phase: 'updated' },
+    { actionType: 'item/tool/requestUserInput', category: 'action', phase: 'requested' },
+  ] as const)('uses a neutral icon for settled $actionType trajectory', ({ actionType, category, phase }) => {
+    const action = codexActionView({ ...lifecycleBlock(), actionType, category, phase })
+    const html = renderToStaticMarkup(<CodexActionRow active={false} action={action!} t={t} />)
+    expect(html).toContain('<svg')
+    expect(html).not.toContain('data-state="done"')
+  })
+
+  it.each([
+    { phase: 'failed', state: 'error' },
+    { phase: 'declined', state: 'warning' },
+  ] as const)('keeps the $state status dot for $phase trajectory', ({ phase, state }) => {
+    const action = codexActionView({ ...lifecycleBlock(), phase })
+    const html = renderToStaticMarkup(<CodexActionRow active={false} action={action!} t={t} />)
     expect(html).toContain(`data-state="${state}"`)
   })
 
@@ -104,7 +123,7 @@ describe('Codex Assistant renderer', () => {
       />,
     )
     expect(html).not.toContain('data-state="ongoing"')
-    expect(html.match(/data-state="done"/gu)).toHaveLength(2)
+    expect(html).not.toContain('data-state="done"')
   })
 
   it('specializes codex-action while preserving the generic fallback', () => {

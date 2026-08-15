@@ -3,8 +3,18 @@ import type { ReactNode } from 'react'
 import type { AssistantBlock } from '@deepseek-ai/dsh-client-runtime/client'
 import { ImageGallery } from '@deepseek-ai/dsh-client-ui-attachment'
 import type { ImageLoader, MessageImageLabels } from '@deepseek-ai/dsh-client-ui-attachment'
-import { DisclosureRow, JsonBlock, JsonTree, MarkdownText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { MarkdownFileMentions, StateDotState } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  DisclosureRow,
+  IconApiOutline14,
+  IconBrowseOutline16,
+  IconListPenOutline16,
+  IconQuestionOutline14,
+  JsonBlock,
+  JsonTree,
+  MarkdownText,
+  StateDot,
+} from '@deepseek-ai/dsh-client-ui-primitives'
+import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -114,14 +124,23 @@ function actionTitle(actionType: string, t: CodexTranslate): string {
   }
 }
 
-function phaseState(phase: CodexActionBlock['phase'], active: boolean): StateDotState {
-  switch (phase) {
+function settledActionIcon(action: CodexActionView): ReactNode {
+  if (action.category === 'context') return <IconBrowseOutline16 size={14} />
+  switch (action.actionType) {
+    case 'turn/plan/updated': return <IconListPenOutline16 size={14} />
+    case 'item/tool/requestUserInput': return <IconQuestionOutline14 size={14} />
+    default: return <IconApiOutline14 size={14} />
+  }
+}
+
+function actionIcon(action: CodexActionView, active: boolean): ReactNode {
+  switch (action.phase) {
     case 'requested':
-    case 'started': return active ? 'ongoing' : 'done'
+    case 'started': return active ? <StateDot state="ongoing" /> : settledActionIcon(action)
     case 'updated':
-    case 'completed': return 'done'
-    case 'failed': return 'error'
-    case 'declined': return 'warning'
+    case 'completed': return settledActionIcon(action)
+    case 'failed': return <StateDot state="error" />
+    case 'declined': return <StateDot state="warning" />
   }
 }
 
@@ -193,7 +212,7 @@ export function CodexActionRow({
       <DisclosureRow
         rowClassName={css.actionHeader}
         titleClassName={css.actionTitle}
-        icon={<StateDot state={phaseState(action.phase, active)} />}
+        icon={actionIcon(action, active)}
         title={actionTitle(action.actionType, t)}
         open={expanded}
         expandable

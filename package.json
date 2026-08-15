@@ -1,6 +1,6 @@
 {
   "name": "dsh-llm-codex-app-server",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "DeepSeek Harness LLM provider backed by the locally authenticated Codex App Server",
   "type": "module",
   "main": "lib/index.js",
