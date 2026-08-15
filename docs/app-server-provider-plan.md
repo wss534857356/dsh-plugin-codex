@@ -27,7 +27,7 @@ Each Harness model request gets one managed App Server subprocess and one epheme
    - `developerInstructions` set to the empty string;
    - `personality` set to `none`;
    - no collaboration mode;
-   - dynamic tools derived exactly from Harness tool schemas;
+   - dynamic tools derived from Harness tool schemas under the Harness namespace, with the Harness skill loader mapped and bounded to its logged session catalog;
    - read-only, never-approve execution policy as defense in depth.
 4. Emit a lifecycle-category `thread/start` report containing the returned `instructionSources`; a non-empty report is disclosure, not failure and the report is not classified as a model action.
 5. Inject all user, assistant, tool-call, and tool-result history as native protocol items derived from the Harness request, then start an empty turn because the current user message is already in that logged history.
@@ -52,7 +52,7 @@ The test requires exact equality for outbound instructions, exact equality for t
 Runtime checks complement the capture test:
 
 - `instructionSources` must be valid JSON and is logged in the provider trajectory;
-- every dynamic call must name an offered Harness tool and carry object-valued JSON arguments;
+- every dynamic call must carry the Harness namespace, name an offered mapped tool, and carry object-valued JSON arguments; the mapped Harness skill loader also requires a current catalog entry;
 - only the documented reasoning, assistant-message, dynamic-tool, usage, and lifecycle events are accepted;
 - native action items become provider-owned trajectory blocks and never generate Harness tool execution events;
 - the installed Codex version and generated protocol schema must match the pinned baseline.
@@ -85,7 +85,7 @@ The product decision selects option 2: preserve the local Codex login and implem
 The prompt-ownership invariants remain documented as disproven properties rather than being weakened or relabeled. Implementation acceptance now requires:
 
 1. Harness history and the current user input are reconstructed only from the Harness request.
-2. Harness tools are declared as App Server dynamic tools and only the Harness agent loop executes them.
+2. Harness tools are declared as namespaced App Server dynamic tools, the Harness skill loader uses its catalog-bounded mapped name, and only the Harness agent loop executes validated callbacks.
 3. Codex-added prompt and tool layers remain disclosed in documentation and covered by the wire characterization test.
 4. Every Codex-native action lifecycle, including raw Code Mode calls without a `ThreadItem` pair, is emitted as provider-owned `codex-action` trajectory and never represented as a Harness tool call.
 5. Reasoning, text, Harness dynamic-tool requests, usage, cancellation, and failures are emitted as live Harness stream events.

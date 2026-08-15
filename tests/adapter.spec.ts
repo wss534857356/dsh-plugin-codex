@@ -317,7 +317,7 @@ describe('CodexAppServerAdapter', () => {
       reason: { kind: 'stop' },
       replayState: {
         kind: 'codex-app-server',
-        version: 2,
+        version: 3,
         items: [
           expect.objectContaining({ type: 'reasoning' }),
           expect.objectContaining({ type: 'message' }),

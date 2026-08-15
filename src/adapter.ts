@@ -141,7 +141,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
       )
     }
     const history = appServerHistory(options)
-    const dynamicTools = appServerDynamicTools(options.tools)
+    const dynamicTools = appServerDynamicTools(options.tools, options.messages)
     const mapper = new AppServerEventMapper(history, options.tools?.map(tool => tool.name))
     const reasoningEffort = options.reasoningEffort === undefined
       ? undefined
@@ -183,7 +183,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
           && event.method === 'item/tool/call'
           && event.params.namespace === HARNESS_TOOL_NAMESPACE) {
           for (const chunk of mapper.closeOpen()) yield chunk
-          const call = harnessToolCall(event, options.tools)
+          const call = harnessToolCall(event, options.tools, options.messages)
           for (const chunk of mapper.toolCall(call)) yield chunk
           const usage = mapper.usage()
           if (usage !== undefined) yield { type: 'usage', usage }

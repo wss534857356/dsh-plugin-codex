@@ -21,7 +21,9 @@ import type {
 import { HARNESS_TOOL_NAMESPACE } from './identifiers.ts'
 
 const REPLAY_KIND = 'codex-app-server'
-const REPLAY_VERSION = 2
+const REPLAY_VERSION = 3
+const HARNESS_SKILL_NAME = 'skill'
+const HARNESS_SKILL_TOOL_NAME = 'harness_skill'
 const NATIVE_COMPACTION_ITEM_TYPES = new Set([
   'compaction',
   'compaction_trigger',
@@ -30,6 +32,11 @@ const NATIVE_COMPACTION_ITEM_TYPES = new Set([
 
 interface JsonObject {
   readonly [key: string]: unknown
+}
+
+interface BridgedTool {
+  readonly name: string
+  readonly tool: ToolSchema
 }
 
 /** Logged Codex-owned lifecycle, context, action, or diagnostic snapshot. */
@@ -94,6 +101,79 @@ function jsonValue(value: unknown, label: string): JsonValue {
     return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, jsonValue(entry, `${label}.${key}`)]))
   }
   throw new LlmError(`Codex App Server returned non-JSON ${label}`, 'MALFORMED_RESPONSE')
+}
+
+function jsonRecord(value: JsonValue, label: string): Record<string, JsonValue> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new LlmError(`${label} must be a JSON object`, 'INVALID_TOOL_SCHEMA')
+  }
+  return value
+}
+
+function appServerToolName(name: string): string {
+  return name === HARNESS_SKILL_NAME ? HARNESS_SKILL_TOOL_NAME : name
+}
+
+function harnessSkillCatalogNames(messages: GenerateOptions['messages']): string[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const source = messages[index]!.source as unknown as {
+      readonly kind?: unknown
+      readonly form?: unknown
+      readonly entries?: unknown
+    }
+    if (source.kind !== 'skill-catalog') continue
+    if (source.form !== 'catalog' || !Array.isArray(source.entries)) {
+      throw new LlmError('Harness history contains an invalid skill catalog', 'INVALID_HISTORY')
+    }
+    const names: string[] = []
+    const seen = new Set<string>()
+    for (const entry of source.entries) {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)
+        || typeof (entry as { readonly name?: unknown }).name !== 'string'
+        || (entry as { readonly name: string }).name.length === 0
+        || seen.has((entry as { readonly name: string }).name)) {
+        throw new LlmError('Harness history contains an invalid skill catalog entry', 'INVALID_HISTORY')
+      }
+      const name = (entry as { readonly name: string }).name
+      seen.add(name)
+      names.push(name)
+    }
+    return names
+  }
+  return []
+}
+
+function bridgedTools(
+  tools: readonly ToolSchema[] | undefined,
+  skillNames: readonly string[],
+): BridgedTool[] {
+  const bridged: BridgedTool[] = []
+  const seen = new Set<string>()
+  for (const tool of tools ?? []) {
+    if (tool.name === HARNESS_SKILL_NAME && skillNames.length === 0) continue
+    const name = appServerToolName(tool.name)
+    if (seen.has(name)) {
+      throw new LlmError(`Harness tool names collide after App Server mapping: ${JSON.stringify(name)}`, 'INVALID_TOOL_SCHEMA')
+    }
+    seen.add(name)
+    bridged.push({ name, tool })
+  }
+  return bridged
+}
+
+function appServerToolSchema(tool: ToolSchema, skillNames: readonly string[]): JsonValue {
+  const schema = jsonValue(tool.parameters, `schema for ${tool.name}`)
+  if (tool.name !== HARNESS_SKILL_NAME) return schema
+  const root = jsonRecord(schema, 'Harness skill tool schema')
+  const properties = jsonRecord(root.properties!, 'Harness skill tool schema properties')
+  const name = jsonRecord(properties.name!, 'Harness skill name schema')
+  return {
+    ...root,
+    properties: {
+      ...properties,
+      name: { ...name, enum: [...skillNames] },
+    },
+  }
 }
 
 function replayItems(value: unknown): JsonValue[] | undefined {
@@ -299,7 +379,7 @@ export function appServerHistory(options: GenerateOptions): JsonValue[] {
             type: 'function_call',
             call_id: String(block.id),
             namespace: HARNESS_TOOL_NAMESPACE,
-            name: block.name,
+            name: appServerToolName(block.name),
             arguments: argumentsJson(block.arguments, `arguments for ${block.name}`),
           }, 'harness')
           break
@@ -354,18 +434,27 @@ export function appServerToolResults(options: GenerateOptions): CodexAppServerTo
   }))
 }
 
-/** Translate the exact Harness tool catalog to App Server dynamic tools. */
-export function appServerDynamicTools(tools: readonly ToolSchema[] | undefined): JsonValue[] {
-  if (tools === undefined || tools.length === 0) return []
+/** Translate available Harness tools to App Server dynamic tools. */
+export function appServerDynamicTools(
+  tools: readonly ToolSchema[] | undefined,
+  messages: GenerateOptions['messages'] = [],
+): JsonValue[] {
+  const skillNames = harnessSkillCatalogNames(messages)
+  const declared = bridgedTools(tools, skillNames)
+  if (declared.length === 0) return []
   return [{
     type: 'namespace',
     name: HARNESS_TOOL_NAMESPACE,
-    description: 'Tools provided by the outer DeepSeek Harness agent loop.',
-    tools: tools.map(tool => ({
+    description: declared.some(({ tool }) => tool.name === HARNESS_SKILL_NAME)
+      ? 'Tools provided by the outer DeepSeek Harness agent loop. The harness_skill alias loads only names from the Harness session catalog; use Codex native skill support for Codex skills.'
+      : 'Tools provided by the outer DeepSeek Harness agent loop.',
+    tools: declared.map(({ name, tool }) => ({
       type: 'function',
-      name: tool.name,
-      description: tool.description,
-      inputSchema: jsonValue(tool.parameters, `schema for ${tool.name}`),
+      name,
+      description: tool.name === HARNESS_SKILL_NAME
+        ? `${tool.description} This App Server alias is only for the outer Harness session catalog, not Codex-native skills.`
+        : tool.description,
+      inputSchema: appServerToolSchema(tool, skillNames),
     })),
   }]
 }
@@ -374,6 +463,7 @@ export function appServerDynamicTools(tools: readonly ToolSchema[] | undefined):
 export function harnessToolCall(
   event: Extract<CodexAppServerEvent, { kind: 'server-request' }>,
   tools: readonly ToolSchema[] | undefined,
+  messages: GenerateOptions['messages'] = [],
 ): HarnessToolCall {
   if (event.method !== 'item/tool/call') {
     throw new LlmError(`Expected a dynamic tool call, received ${event.method}`, 'MALFORMED_RESPONSE')
@@ -386,14 +476,20 @@ export function harnessToolCall(
   if (params.namespace !== HARNESS_TOOL_NAMESPACE) {
     throw new LlmError('Codex requested a tool outside the DeepSeek Harness namespace', 'UNKNOWN_TOOL')
   }
-  const offered = new Set((tools ?? []).map(tool => tool.name))
-  if (!offered.has(params.tool)) {
+  const skillNames = harnessSkillCatalogNames(messages)
+  const offered = new Map(bridgedTools(tools, skillNames).map(({ name, tool }) => [name, tool.name]))
+  const originalName = offered.get(params.tool)
+  if (originalName === undefined) {
     throw new LlmError(`Codex requested unavailable Harness tool "${params.tool}"`, 'UNKNOWN_TOOL')
   }
-  object(params.arguments, `arguments for ${params.tool}`)
+  const args = object(params.arguments, `arguments for ${params.tool}`)
+  if (originalName === HARNESS_SKILL_NAME
+    && (typeof args.name !== 'string' || !skillNames.includes(args.name))) {
+    throw new LlmError('Codex requested a skill outside the current Harness session catalog', 'UNKNOWN_TOOL')
+  }
   return {
     id: CallId(params.callId),
-    name: params.tool,
+    name: originalName,
     arguments: JSON.stringify(params.arguments),
   }
 }
@@ -502,7 +598,7 @@ export class AppServerEventMapper {
 
   constructor(history: readonly JsonValue[] = [], harnessToolNames: readonly string[] = []) {
     this.initialHistory = history.map((item, index) => jsonValue(item, `history[${index}]`))
-    this.harnessToolNames = new Set(harnessToolNames)
+    this.harnessToolNames = new Set(harnessToolNames.map(appServerToolName))
     this.resetBaseline()
   }
 
@@ -825,7 +921,7 @@ export class AppServerEventMapper {
         type: 'function_call',
         call_id: String(call.id),
         namespace: HARNESS_TOOL_NAMESPACE,
-        name: call.name,
+        name: appServerToolName(call.name),
         arguments: call.arguments,
       })
     }

@@ -8,7 +8,7 @@ This differs from Harness's built-in `@deepseek-ai/dsh-subagent-codex`. The buil
 
 An ordinary Harness conversation session reuses one pinned `@openai/codex@0.147.0` App Server in a private empty directory and one ephemeral thread while its bounded cache lease remains valid. The process uses the native Codex account state under `CODEX_HOME`; the plugin never reads, copies, logs, or stores OAuth tokens or API keys. Requests without a session id and auxiliary requests remain one-shot.
 
-The adapter supplies the Harness system text as App Server base instructions, reconstructs cold threads by injecting all logged Harness messages before an empty turn, declares Harness tools under the `deepseek_harness` App Server namespace, and sends later ordinary user messages through native turn input. A warm thread is reused only when the complete request is the exact expected continuation; otherwise it is discarded and rebuilt. App Server still adds Codex-owned instructions and tools. This is deliberately a layered provider, not a raw-model transport or a claim that Harness replaces the Codex prompt.
+The adapter supplies the Harness system text as App Server base instructions, reconstructs cold threads by injecting all logged Harness messages before an empty turn, declares Harness tools under the `deepseek_harness` App Server namespace, and sends later ordinary user messages through native turn input. The outer Harness `skill` tool is exposed there as `harness_skill`; its argument schema accepts only names from the current Harness session catalog, while Codex-native skills stay on Codex's own loader. A warm thread is reused only when the complete request is the exact expected continuation; otherwise it is discarded and rebuilt. App Server still adds Codex-owned instructions and tools. This is deliberately a layered provider, not a raw-model transport or a claim that Harness replaces the Codex prompt.
 
 Reasoning, assistant text, usage, Codex-owned context, diagnostics, and action lifecycles are converted to Harness stream events as they arrive. Codex cached input is reported through Harness `cacheReadTokens`, so the standard token meter and conversation statistics display the cache-hit percentage without provider-specific UI. Each `codex-action` block carries a `category` (`lifecycle`, `context`, `action`, or `diagnostic`), the parsed `phase`, the exact `protocolEvent`, and the lossless protocol snapshot. Raw Code Mode calls and outcomes are included even when App Server emits no corresponding `ThreadItem`. A failed or declined Codex-native action remains an action outcome and does not fail the Harness model request unless App Server reports that the turn itself failed.
 
@@ -16,7 +16,7 @@ The package also ships a browser plugin. It shadows the stock Assistant cell at 
 
 The `thread/start` block is provider lifecycle disclosure, not evidence that the model performed a native action. Codex-added developer, system, and user messages that are not part of injected Harness history appear as `context/injected` reports. They remain logged for audit but are not fed back as Harness-authored history on the next stateless request.
 
-When App Server requests a declared tool in the `deepseek_harness` namespace, the adapter emits a real Harness `tool-call`, ends that model step, and leaves the App Server callback pending. Namespace and declared name must both match before the call crosses into Harness. An unnamespaced Codex-native call remains provider trajectory even when its name is `skill` or another Harness tool name; only a namespaced Harness call is hidden from the native-action presentation. Harness owns execution, approval, presentation, and durable logging for those namespaced calls. An exact next request replies with the logged tool result and continues the same Codex turn; a mismatch forces a cold reconstruction.
+When App Server requests a declared tool in the `deepseek_harness` namespace, the adapter emits a real Harness `tool-call`, ends that model step, and leaves the App Server callback pending. Namespace and mapped name must both match before the call crosses into Harness; `harness_skill` additionally requires an exact current Harness catalog name and maps back to `skill` only after validation. An unnamespaced Codex-native call remains provider trajectory even when its name resembles a Harness tool; only a validated namespaced Harness call is hidden from the native-action presentation. Harness owns execution, approval, presentation, and durable logging for those calls. An exact next request replies with the logged tool result and continues the same Codex turn; a mismatch forces a cold reconstruction.
 
 ## Install
 
@@ -36,7 +36,7 @@ pnpm run check
 Install the generated tarball into a Harness profile:
 
 ```sh
-dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.10.tgz
+dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.11.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
@@ -106,7 +106,7 @@ Example override:
 - App Server automatic compaction is configured at Harness's safe integer ceiling so Harness can replace logged history first. Any native compaction item or notification still makes the live lease non-reusable and is never written into reconstructible replay state. Basic compaction must use a summarization provider that supports its `maxTokens` requirement.
 - `CODEX_INTERNAL_ORIGINATOR_OVERRIDE=deepseek-harness` identifies adapter requests; this internal compatibility point is reverified on Codex upgrades.
 - Session-scoped threads are in-memory disposable caches. The Harness log and adapter replay state reconstruct model-visible history after process restart, plugin reload, expiry, eviction, compaction, fork, repair, retry mismatch, or any changed request epoch; Codex rollout files are never resumed.
-- Replay state version `2` contains only provider outputs in `items`; observed Codex-owned context is retained separately in `contextItems` for audit and never reinjected. Harness calls retain their `deepseek_harness` namespace during reconstruction. Reconstruction coalesces cumulative snapshots by stable provider item or call identity, so sessions written by older plugin versions do not multiply the same opaque outputs on later requests. Older replay versions fall back to Harness message reconstruction.
+- Replay state version `3` contains only provider outputs in `items`; observed Codex-owned context is retained separately in `contextItems` for audit and never reinjected. Harness calls retain their `deepseek_harness` namespace and mapped App Server name during reconstruction. Reconstruction coalesces cumulative snapshots by stable provider item or call identity, so sessions written by older plugin versions do not multiply the same opaque outputs on later requests. Older replay versions fall back to Harness message reconstruction.
 - Authentication and subscription availability belong to the native Codex installation. Login failures surface as Harness `AUTH` failures; the plugin provides no credential UI.
 
 ## Development
