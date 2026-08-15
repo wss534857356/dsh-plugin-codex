@@ -299,7 +299,9 @@ export class NativeImageBridge {
       || totalBytes > store.imageLimits.maxMessageImageBytes) {
       throw new LlmError('Codex App Server returned too many image bytes in one tool output', 'MALFORMED_RESPONSE')
     }
-    await Promise.all(pending.map(entry => store.validateImage(entry.input)))
+    await Promise.all(pending
+      .filter(entry => !this.references.has(imageKey(entry.input)))
+      .map(entry => store.validateImage(entry.input)))
     const output = [...current.output]
     const images: ImageAttachmentRef[] = []
     for (const entry of pending) {

@@ -93,7 +93,7 @@ describe('NativeImageBridge', () => {
     expect(raw.images).toEqual([])
     expect(JSON.stringify(raw.event)).not.toContain(PNG_BASE64)
     expect(store.saveImage).toHaveBeenCalledOnce()
-    expect(store.validateImage).toHaveBeenCalledOnce()
+    expect(store.validateImage).not.toHaveBeenCalled()
 
     if (raw.event.kind !== 'notification') throw new Error('expected a notification')
     const durable = raw.event.params.item as JsonValue
@@ -118,6 +118,16 @@ describe('NativeImageBridge', () => {
     const bridge = new NativeImageBridge(() => store)
     await expect(bridge.externalize(imageCompleted(''))).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' })
     expect(store.saveImage).not.toHaveBeenCalled()
+  })
+
+  it('validates and publishes an image that appears only in a raw tool output', async () => {
+    const store = imageStore()
+    const bridge = new NativeImageBridge(() => store)
+    const raw = await bridge.externalize(rawImageOutput())
+    expect(raw.images).toEqual([IMAGE_REF])
+    expect(store.validateImage).toHaveBeenCalledOnce()
+    expect(store.saveImage).toHaveBeenCalledOnce()
+    expect(JSON.stringify(raw.event)).not.toContain(PNG_BASE64)
   })
 
   it('fails image output when the Harness attachment service is unavailable', async () => {
