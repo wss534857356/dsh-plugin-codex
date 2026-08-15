@@ -14,12 +14,10 @@ import type {
   ToolSchema,
 } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import type {
-  CodexAppServerEvent,
-  CodexAppServerToolResult,
-  JsonValue,
-} from './runner.ts'
+import type { CodexAppServerToolResult } from './runner.ts'
 import { HARNESS_TOOL_NAMESPACE } from './identifiers.ts'
+import { jsonValue, object } from './wire.ts'
+import type { CodexAppServerEvent, JsonObject, JsonValue } from './wire.ts'
 
 const REPLAY_KIND = 'codex-app-server'
 const REPLAY_VERSION = 4
@@ -30,10 +28,6 @@ const NATIVE_COMPACTION_ITEM_TYPES = new Set([
   'compaction_trigger',
   'context_compaction',
 ])
-
-interface JsonObject {
-  readonly [key: string]: unknown
-}
 
 interface BridgedTool {
   readonly name: string
@@ -72,13 +66,6 @@ export interface HarnessToolCall {
   readonly arguments: string
 }
 
-function object(value: unknown, label: string): JsonObject {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new LlmError(`Codex App Server returned invalid ${label}`, 'MALFORMED_RESPONSE')
-  }
-  return value as JsonObject
-}
-
 function finiteInteger(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     throw new LlmError(`Codex App Server returned invalid ${label}`, 'MALFORMED_RESPONSE')
@@ -92,16 +79,6 @@ function checkedAdd(left: number, right: number, label: string): number {
     throw new LlmError(`Codex App Server ${label} usage overflowed`, 'MALFORMED_RESPONSE')
   }
   return result
-}
-
-function jsonValue(value: unknown, label: string): JsonValue {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (Array.isArray(value)) return value.map((entry, index) => jsonValue(entry, `${label}[${index}]`))
-  if (typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, jsonValue(entry, `${label}.${key}`)]))
-  }
-  throw new LlmError(`Codex App Server returned non-JSON ${label}`, 'MALFORMED_RESPONSE')
 }
 
 function jsonRecord(value: JsonValue, label: string): Record<string, JsonValue> {
