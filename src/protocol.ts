@@ -509,6 +509,14 @@ interface UsageAccumulator {
   reasoningTokens: number
 }
 
+const USAGE_FIELDS = [
+  ['inputTokens', 'input token'],
+  ['outputTokens', 'output token'],
+  ['cacheReadTokens', 'cache-read token'],
+  ['cacheWriteTokens', 'cache-write token'],
+  ['reasoningTokens', 'reasoning token'],
+] as const satisfies ReadonlyArray<readonly [keyof UsageAccumulator, string]>
+
 const ACTION_NOTIFICATION_METHODS = new Set([
   'hook/started',
   'hook/completed',
@@ -686,15 +694,14 @@ export class AppServerEventMapper {
 
   private atomicBlock(block: ContentBlock): StreamChunk[] {
     const index = this.nextIndex++
-    return [
-      { type: 'block-start', index, blockType: block.type },
-      ...(block.type === 'text'
-        ? [{ type: 'text-delta' as const, index, text: block.text }]
-        : block.type === 'reasoning'
-          ? [{ type: 'reasoning-delta' as const, index, text: block.text }]
-          : []),
-      { type: 'block-end', index, block },
-    ]
+    const chunks: StreamChunk[] = [{ type: 'block-start', index, blockType: block.type }]
+    if (block.type === 'text') {
+      chunks.push({ type: 'text-delta', index, text: block.text })
+    } else if (block.type === 'reasoning') {
+      chunks.push({ type: 'reasoning-delta', index, text: block.text })
+    }
+    chunks.push({ type: 'block-end', index, block })
+    return chunks
   }
 
   private action(
@@ -765,31 +772,9 @@ export class AppServerEventMapper {
       return
     }
     this.rawUsageSeen = true
-    this.accumulatedUsage.inputTokens = checkedAdd(
-      this.accumulatedUsage.inputTokens,
-      decoded.inputTokens,
-      'input token',
-    )
-    this.accumulatedUsage.outputTokens = checkedAdd(
-      this.accumulatedUsage.outputTokens,
-      decoded.outputTokens,
-      'output token',
-    )
-    this.accumulatedUsage.cacheReadTokens = checkedAdd(
-      this.accumulatedUsage.cacheReadTokens,
-      decoded.cacheReadTokens,
-      'cache-read token',
-    )
-    this.accumulatedUsage.cacheWriteTokens = checkedAdd(
-      this.accumulatedUsage.cacheWriteTokens,
-      decoded.cacheWriteTokens,
-      'cache-write token',
-    )
-    this.accumulatedUsage.reasoningTokens = checkedAdd(
-      this.accumulatedUsage.reasoningTokens,
-      decoded.reasoningTokens,
-      'reasoning token',
-    )
+    for (const [field, label] of USAGE_FIELDS) {
+      this.accumulatedUsage[field] = checkedAdd(this.accumulatedUsage[field], decoded[field], label)
+    }
   }
 
   /** Translate one decoded event to zero or more immediately publishable chunks. */
