@@ -1,5 +1,7 @@
 # dsh-llm-codex-app-server
 
+English | [中文](README.zh.md)
+
 `dsh-llm-codex-app-server` registers a DeepSeek Harness main-model provider backed by the locally authenticated Codex App Server. It is an out-of-tree Harness bundle, so installing it does not modify the `deepseek-harness` repository.
 
 This differs from Harness's built-in `@deepseek-ai/dsh-subagent-codex`. The built-in package exposes Codex as a delegated child Agent. This package registers on `ctx.llm`, so `codex-local` is a selectable provider for the Harness Agent loop.
