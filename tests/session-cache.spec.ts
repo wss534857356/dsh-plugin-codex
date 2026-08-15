@@ -111,6 +111,7 @@ describe('CodexSessionCache', () => {
     const call: JsonValue = {
       type: 'function_call',
       call_id: 'call-1',
+      namespace: 'deepseek_harness',
       name: 'read_file',
       arguments: '{"path":"a.txt"}',
     }

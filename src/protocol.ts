@@ -18,9 +18,10 @@ import type {
   CodexAppServerToolResult,
   JsonValue,
 } from './runner.ts'
+import { HARNESS_TOOL_NAMESPACE } from './identifiers.ts'
 
 const REPLAY_KIND = 'codex-app-server'
-const REPLAY_VERSION = 1
+const REPLAY_VERSION = 2
 const NATIVE_COMPACTION_ITEM_TYPES = new Set([
   'compaction',
   'compaction_trigger',
@@ -297,6 +298,7 @@ export function appServerHistory(options: GenerateOptions): JsonValue[] {
           append({
             type: 'function_call',
             call_id: String(block.id),
+            namespace: HARNESS_TOOL_NAMESPACE,
             name: block.name,
             arguments: argumentsJson(block.arguments, `arguments for ${block.name}`),
           }, 'harness')
@@ -323,6 +325,7 @@ export function appServerHistory(options: GenerateOptions): JsonValue[] {
 function existingHistoryOrigin(item: JsonValue): HistoryItemOrigin {
   if (item === null || typeof item !== 'object' || Array.isArray(item)) return 'provider'
   if (item.type === 'function_call_output') return 'harness'
+  if (item.type === 'function_call' && item.namespace === HARNESS_TOOL_NAMESPACE) return 'harness'
   if (item.type === 'message' && item.role !== 'assistant') return 'harness'
   return 'provider'
 }
@@ -353,12 +356,18 @@ export function appServerToolResults(options: GenerateOptions): CodexAppServerTo
 
 /** Translate the exact Harness tool catalog to App Server dynamic tools. */
 export function appServerDynamicTools(tools: readonly ToolSchema[] | undefined): JsonValue[] {
-  return (tools ?? []).map(tool => ({
-    type: 'function',
-    name: tool.name,
-    description: tool.description,
-    inputSchema: jsonValue(tool.parameters, `schema for ${tool.name}`),
-  }))
+  if (tools === undefined || tools.length === 0) return []
+  return [{
+    type: 'namespace',
+    name: HARNESS_TOOL_NAMESPACE,
+    description: 'Tools provided by the outer DeepSeek Harness agent loop.',
+    tools: tools.map(tool => ({
+      type: 'function',
+      name: tool.name,
+      description: tool.description,
+      inputSchema: jsonValue(tool.parameters, `schema for ${tool.name}`),
+    })),
+  }]
 }
 
 /** Decode one App Server dynamic callback without executing it in the provider. */
@@ -371,9 +380,11 @@ export function harnessToolCall(
   }
   const params = event.params
   if (typeof params.callId !== 'string' || params.callId.length === 0
-    || typeof params.tool !== 'string' || params.tool.length === 0
-    || params.namespace !== null) {
+    || typeof params.tool !== 'string' || params.tool.length === 0) {
     throw new LlmError('Codex App Server returned an invalid dynamic tool call', 'MALFORMED_RESPONSE')
+  }
+  if (params.namespace !== HARNESS_TOOL_NAMESPACE) {
+    throw new LlmError('Codex requested a tool outside the DeepSeek Harness namespace', 'UNKNOWN_TOOL')
   }
   const offered = new Set((tools ?? []).map(tool => tool.name))
   if (!offered.has(params.tool)) {
@@ -561,6 +572,7 @@ export class AppServerEventMapper {
     }
     if (current.type === 'message' || current.type === 'reasoning') return []
     if (RAW_REQUEST_ITEM_TYPES.has(current.type)
+      && current.namespace === HARNESS_TOOL_NAMESPACE
       && typeof current.name === 'string'
       && this.harnessToolNames.has(current.name)) {
       return []
@@ -695,7 +707,8 @@ export class AppServerEventMapper {
       })
     }
     if (event.kind === 'server-request') {
-      if (event.method === 'item/tool/call') return []
+      if (event.method === 'item/tool/call'
+        && event.params.namespace === HARNESS_TOOL_NAMESPACE) return []
       const actionId = typeof event.params.itemId === 'string' ? event.params.itemId : String(event.id)
       return this.action(
         actionId,
@@ -805,11 +818,13 @@ export class AppServerEventMapper {
         && !Array.isArray(candidate)
         && candidate.type === 'function_call'
         && candidate.call_id === String(call.id)
+        && candidate.namespace === HARNESS_TOOL_NAMESPACE
     })
     if (!present) {
       this.rawItems.push({
         type: 'function_call',
         call_id: String(call.id),
+        namespace: HARNESS_TOOL_NAMESPACE,
         name: call.name,
         arguments: call.arguments,
       })

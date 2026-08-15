@@ -255,15 +255,20 @@ describe('Codex App Server wire ownership', () => {
       runtimeWorkspaceRoots: [],
       selectedCapabilityRoots: [],
       dynamicTools: [{
-        type: 'function',
-        name: HARNESS_TOOL,
-        description: HARNESS_TOOL_SENTINEL,
-        inputSchema: {
-          type: 'object',
-          properties: { value: { type: 'string' } },
-          required: ['value'],
-          additionalProperties: false,
-        },
+        type: 'namespace',
+        name: 'deepseek_harness',
+        description: 'Tools provided by the outer DeepSeek Harness agent loop.',
+        tools: [{
+          type: 'function',
+          name: HARNESS_TOOL,
+          description: HARNESS_TOOL_SENTINEL,
+          inputSchema: {
+            type: 'object',
+            properties: { value: { type: 'string' } },
+            required: ['value'],
+            additionalProperties: false,
+          },
+        }],
       }],
       ephemeral: true,
     }), 'thread/start result')
@@ -281,6 +286,7 @@ describe('Codex App Server wire ownership', () => {
         {
           type: 'function_call',
           call_id: TOOL_CALL_ID,
+          namespace: 'deepseek_harness',
           name: HARNESS_TOOL,
           arguments: '{"value":"from-history"}',
         },
@@ -310,6 +316,7 @@ describe('Codex App Server wire ownership', () => {
       expect.objectContaining({
         type: 'function_call',
         call_id: TOOL_CALL_ID,
+        namespace: 'deepseek_harness',
         name: HARNESS_TOOL,
         arguments: '{"value":"from-history"}',
       }),

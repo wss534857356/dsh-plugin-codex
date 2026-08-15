@@ -317,7 +317,7 @@ describe('CodexAppServerAdapter', () => {
       reason: { kind: 'stop' },
       replayState: {
         kind: 'codex-app-server',
-        version: 1,
+        version: 2,
         items: [
           expect.objectContaining({ type: 'reasoning' }),
           expect.objectContaining({ type: 'message' }),
@@ -437,6 +437,7 @@ describe('CodexAppServerAdapter', () => {
             type: 'function_call',
             id: 'provider-item-1',
             call_id: 'call-1',
+            namespace: 'deepseek_harness',
             name: 'read_file',
             arguments: '{"path":"a.txt"}',
           },
@@ -463,7 +464,7 @@ describe('CodexAppServerAdapter', () => {
           threadId: 'thread-1',
           turnId: 'turn-1',
           callId: 'call-1',
-          namespace: null,
+          namespace: 'deepseek_harness',
           tool: 'read_file',
           arguments: { path: 'a.txt' },
         },
@@ -532,6 +533,7 @@ describe('CodexAppServerAdapter', () => {
             type: 'function_call',
             id: 'provider-item-1',
             call_id: 'call-1',
+            namespace: 'deepseek_harness',
             name: 'read_file',
             arguments: '{"path":"a.txt"}',
           },
@@ -545,7 +547,7 @@ describe('CodexAppServerAdapter', () => {
           threadId: 'thread-1',
           turnId: 'turn-1',
           callId: 'call-1',
-          namespace: null,
+          namespace: 'deepseek_harness',
           tool: 'read_file',
           arguments: { path: 'a.txt' },
         },
@@ -576,7 +578,11 @@ describe('CodexAppServerAdapter', () => {
       type: 'finish',
       reason: { kind: 'tool-calls' },
       replayState: {
-        items: [expect.objectContaining({ type: 'function_call', call_id: 'call-1' })],
+        items: [expect.objectContaining({
+          type: 'function_call',
+          call_id: 'call-1',
+          namespace: 'deepseek_harness',
+        })],
       },
     })
     expect(chunks.flatMap(chunk => chunk.type === 'block-end' && chunk.block.type === 'codex-action'

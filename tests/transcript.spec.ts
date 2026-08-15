@@ -153,7 +153,7 @@ class TranscriptRunner implements CodexAppServerRunnerPort {
           threadId: 'thread-1',
           turnId: 'turn-1',
           callId: 'call-read-1',
-          namespace: null,
+          namespace: 'deepseek_harness',
           tool: 'read_file',
           arguments: { path: 'notes.txt' },
         },

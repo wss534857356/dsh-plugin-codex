@@ -5,7 +5,7 @@ import type {
   CodexAppServerThreadPort,
   CodexAppServerTurnRequest,
 } from './runner.ts'
-import { SAFE_REASONING_EFFORT } from './identifiers.ts'
+import { HARNESS_TOOL_NAMESPACE, SAFE_REASONING_EFFORT } from './identifiers.ts'
 import { JsonRpcConnection, jsonValue, object } from './wire.ts'
 import type { CodexAppServerEvent } from './wire.ts'
 
@@ -151,7 +151,8 @@ export class ManagedCodexThread implements CodexAppServerThreadPort {
         if (next.done) throw new LlmError('Codex App Server event stream ended before the turn', 'TRANSPORT')
         const event = next.value
         if (event.kind === 'server-request') {
-          if (event.method === 'item/tool/call') {
+          if (event.method === 'item/tool/call'
+            && event.params.namespace === HARNESS_TOOL_NAMESPACE) {
             this.assertToolRequest(event, turnId)
             this.state = { kind: 'tool', turnId, request: event }
             retained = true

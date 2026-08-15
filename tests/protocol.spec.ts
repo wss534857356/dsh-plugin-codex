@@ -77,6 +77,7 @@ describe('App Server protocol translation', () => {
       {
         type: 'function_call',
         call_id: 'call-1',
+        namespace: 'deepseek_harness',
         name: 'read_file',
         arguments: '{"path":"a.txt"}',
       },
@@ -102,7 +103,7 @@ describe('App Server protocol translation', () => {
           kind: 'model',
           provider: 'codex-local',
           model: 'gpt-5.6-sol',
-          replayState: { kind: 'codex-app-server', version: 1, items: [raw], contextItems: [] },
+          replayState: { kind: 'codex-app-server', version: 2, items: [raw], contextItems: [] },
         },
         content: [{ type: 'text', text: 'reconstructed text must not replace raw state' }],
       }],
@@ -127,7 +128,7 @@ describe('App Server protocol translation', () => {
           model: 'gpt-5.6-sol',
           replayState: {
             kind: 'codex-app-server',
-            version: 1,
+            version: 2,
             items: [
               { type: 'compaction', encrypted_content: 'opaque' },
               { type: 'context_compaction', encrypted_content: 'opaque-context' },
@@ -161,6 +162,7 @@ describe('App Server protocol translation', () => {
     const call = {
       type: 'function_call',
       call_id: String(callId),
+      namespace: 'deepseek_harness',
       name: 'read_file',
       arguments: '{"path":"a.txt"}',
     }
@@ -174,7 +176,7 @@ describe('App Server protocol translation', () => {
       kind: 'model' as const,
       provider: 'codex-local',
       model: 'gpt-5.6-sol',
-      replayState: { kind: 'codex-app-server', version: 1, items, contextItems: [] },
+      replayState: { kind: 'codex-app-server', version: 2, items, contextItems: [] },
     })
 
     const history = appServerHistory(options({
@@ -289,7 +291,7 @@ describe('App Server protocol translation', () => {
     expect(mapper.accept(echoed)).toEqual([])
     expect(mapper.replayState()).toEqual({
       kind: 'codex-app-server',
-      version: 1,
+      version: 2,
       items: [],
       contextItems: [],
     })
@@ -350,7 +352,7 @@ describe('App Server protocol translation', () => {
 
     expect(mapper.replayState()).toEqual({
       kind: 'codex-app-server',
-      version: 1,
+      version: 2,
       items: [first, second],
       contextItems: [context],
     })
@@ -396,16 +398,22 @@ describe('App Server protocol translation', () => {
         additionalProperties: false,
       },
     }])).toEqual([{
-      type: 'function',
-      name: 'read_file',
-      description: 'Read one file.',
-      inputSchema: {
-        type: 'object',
-        properties: { path: { type: 'string' } },
-        required: ['path'],
-        additionalProperties: false,
-      },
+      type: 'namespace',
+      name: 'deepseek_harness',
+      description: 'Tools provided by the outer DeepSeek Harness agent loop.',
+      tools: [{
+        type: 'function',
+        name: 'read_file',
+        description: 'Read one file.',
+        inputSchema: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+          additionalProperties: false,
+        },
+      }],
     }])
+    expect(appServerDynamicTools(undefined)).toEqual([])
   })
 
   it('accepts only offered object-valued dynamic calls', () => {
@@ -417,7 +425,7 @@ describe('App Server protocol translation', () => {
         threadId: 'thread-1',
         turnId: 'turn-1',
         callId: 'call-1',
-        namespace: null,
+        namespace: 'deepseek_harness',
         tool: 'read_file',
         arguments: { path: 'a.txt' },
       },
@@ -431,8 +439,73 @@ describe('App Server protocol translation', () => {
     })
     expect(() => harnessToolCall({ ...event, params: { ...event.params, tool: 'shell' } }, tools))
       .toThrowError(expect.objectContaining({ code: 'UNKNOWN_TOOL' }))
+    expect(() => harnessToolCall({ ...event, params: { ...event.params, namespace: null } }, tools))
+      .toThrowError(expect.objectContaining({ code: 'UNKNOWN_TOOL' }))
     expect(() => harnessToolCall({ ...event, params: { ...event.params, arguments: 'not-an-object' } }, tools))
       .toThrowError(expect.objectContaining({ code: 'MALFORMED_RESPONSE' }))
+  })
+
+  it('shows an unnamespaced native call while suppressing the Harness-owned echo', () => {
+    const mapper = new AppServerEventMapper([], ['skill'])
+    const raw = (item: Record<string, unknown>): CodexAppServerEvent => ({
+      kind: 'notification',
+      method: 'rawResponseItem/completed',
+      params: { threadId: 'thread-1', turnId: 'turn-1', item },
+    })
+
+    expect(mapper.accept(raw({
+      type: 'function_call',
+      call_id: 'native-skill-1',
+      name: 'skill',
+      arguments: '{"name":"imagegen"}',
+    }))).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'block-end',
+        block: expect.objectContaining({
+          type: 'codex-action',
+          actionId: 'native-skill-1',
+          actionType: 'function_call',
+          phase: 'requested',
+        }),
+      }),
+    ]))
+    expect(mapper.accept(raw({
+      type: 'function_call',
+      call_id: 'harness-skill-1',
+      namespace: 'deepseek_harness',
+      name: 'skill',
+      arguments: '{"name":"project-skill"}',
+    }))).toEqual([])
+  })
+
+  it('reports an unexpected unnamespaced callback as Codex trajectory', () => {
+    const mapper = new AppServerEventMapper([], ['skill'])
+    const chunks = mapper.accept({
+      kind: 'server-request',
+      id: 'native-skill-1',
+      method: 'item/tool/call',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        callId: 'native-skill-1',
+        namespace: null,
+        tool: 'skill',
+        arguments: { name: 'imagegen' },
+      },
+      resolution: 'rejected',
+    })
+
+    expect(chunks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'block-end',
+        block: expect.objectContaining({
+          type: 'codex-action',
+          actionId: 'native-skill-1',
+          actionType: 'item/tool/call',
+          phase: 'declined',
+        }),
+      }),
+    ]))
   })
 
   it('distinguishes successful completion from actual turn failure', () => {

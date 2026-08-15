@@ -190,7 +190,7 @@ describe('Codex App Server runner', () => {
       expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
     ]))
     expect(messages.find(message => message.method === 'initialize')).toMatchObject({
-      params: { clientInfo: { name: 'deepseek-harness', version: '0.1.9' } },
+      params: { clientInfo: { name: 'deepseek-harness', version: '0.1.10' } },
     })
     expect(messages.find(message => message.method === 'thread/start')).toMatchObject({
       params: {
@@ -233,7 +233,7 @@ describe('Codex App Server runner', () => {
             threadId: 'thread-1',
             turnId: 'turn-1',
             callId: 'call-1',
-            namespace: null,
+            namespace: 'deepseek_harness',
             tool: 'read_file',
             arguments: { path: 'a.txt' },
           },
@@ -250,6 +250,49 @@ describe('Codex App Server runner', () => {
     ]))
     expect(messages.some(message => message.id === 'server-call-1')).toBe(false)
     expect(setup.child.terminate).toHaveBeenCalledOnce()
+  })
+
+  it('reports and rejects an unnamespaced tool request without handing it to Harness', async () => {
+    const messages: JsonObject[] = []
+    const setup = runner((message, send, sendRaw) => {
+      messages.push(message)
+      standardScript((write) => {
+        write({
+          id: 'native-skill-1',
+          method: 'item/tool/call',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            callId: 'native-skill-1',
+            namespace: null,
+            tool: 'skill',
+            arguments: { name: 'imagegen' },
+          },
+        })
+      })(message, send, sendRaw)
+      if (message.id === 'native-skill-1') {
+        expect(message.error).toMatchObject({
+          code: -32_001,
+          message: 'DeepSeek Harness cannot answer item/tool/call',
+        })
+        send({ method: 'turn/completed', params: {
+          threadId: 'thread-1',
+          turn: { id: 'turn-1', status: 'completed', error: null },
+        } })
+      }
+    })
+
+    const events = await collect(setup.runner, request())
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'server-request',
+        id: 'native-skill-1',
+        method: 'item/tool/call',
+        resolution: 'rejected',
+      }),
+      expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
+    ]))
+    expect(messages.some(message => message.id === 'native-skill-1' && message.result !== undefined)).toBe(false)
   })
 
   it('keeps one ephemeral process alive across serialized turns', async () => {
@@ -307,7 +350,7 @@ describe('Codex App Server runner', () => {
             threadId: 'thread-1',
             turnId: 'turn-1',
             callId: 'call-1',
-            namespace: null,
+            namespace: 'deepseek_harness',
             tool: 'read_file',
             arguments: { path: 'a.txt' },
           },
@@ -350,7 +393,7 @@ describe('Codex App Server runner', () => {
           threadId: 'thread-1',
           turnId: 'turn-1',
           callId: 'call-1',
-          namespace: null,
+          namespace: 'deepseek_harness',
           tool: 'read_file',
           arguments: { path: 'a.txt' },
         },

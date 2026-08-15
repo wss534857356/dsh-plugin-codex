@@ -13,6 +13,7 @@ import type {
   ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
+import { HARNESS_TOOL_NAMESPACE } from './identifiers.ts'
 import {
   AppServerEventMapper,
   appServerDynamicTools,
@@ -178,7 +179,9 @@ export class CodexAppServerAdapter extends LlmAdapter {
     try {
       for await (const event of events) {
         for (const chunk of mapper.accept(event)) yield chunk
-        if (event.kind === 'server-request' && event.method === 'item/tool/call') {
+        if (event.kind === 'server-request'
+          && event.method === 'item/tool/call'
+          && event.params.namespace === HARNESS_TOOL_NAMESPACE) {
           for (const chunk of mapper.closeOpen()) yield chunk
           const call = harnessToolCall(event, options.tools)
           for (const chunk of mapper.toolCall(call)) yield chunk
