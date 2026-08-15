@@ -51,6 +51,12 @@ Harness profile 设置了 `autoInstallPeers: false`，因此安装时可能报�
 
 若要从源码安装，请使用 `dsh plugin --profile web add github:<owner>/<repo>#<commit>`。通过 Git 安装时，包的 `prepare` 脚本会构建 TypeScript，因此 pnpm 必须允许该包执行构建。已打包的 tarball 或 npm release 已经完成构建。
 
+从 profile 中移除该组合包：
+
+```sh
+dsh plugin --profile web remove dsh-llm-codex-app-server
+```
+
 ## 配置
 
 后续 profile 补丁层可以替换 `llm-codex-app-server` 配置项。Harness 补丁配置项不会深度合并，因此替换时必须重新写出完整配置。

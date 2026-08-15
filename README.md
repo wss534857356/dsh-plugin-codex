@@ -51,6 +51,12 @@ Harness profiles set `autoInstallPeers: false`, so installation may report missi
 
 For source installation, use `dsh plugin --profile web add github:<owner>/<repo>#<commit>`. The package's `prepare` script builds TypeScript during a Git install, so pnpm must allow that package build. A packed tarball or npm release is already built.
 
+Remove the bundle from the profile with:
+
+```sh
+dsh plugin --profile web remove dsh-llm-codex-app-server
+```
+
 ## Configuration
 
 Later profile patch layers can replace the `llm-codex-app-server` row. A replacement must restate the complete config because Harness patch rows do not deep-merge.
