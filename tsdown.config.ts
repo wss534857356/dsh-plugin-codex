@@ -6,6 +6,7 @@ import { transform } from 'lightningcss'
 const PACKAGE_ID = 'dsh-llm-codex-app-server'
 const CSS_PREFIX = '\0codex-app-server-css:'
 const CSS_SUFFIX = '.mjs'
+const CSS_MODULE_PATHS = new Map<string, string>()
 
 const CLIENT_EXTERNALS = [
   'react',
@@ -60,11 +61,18 @@ export default defineConfig([
       name: 'codex-app-server-css-modules',
       resolveId(source: string, importer: string | undefined) {
         if (!source.endsWith('.module.css') || importer === undefined) return null
-        return `${CSS_PREFIX}${resolve(dirname(importer), source)}${CSS_SUFFIX}`
+        const path = resolve(dirname(importer), source)
+        const id = `${CSS_PREFIX}${basename(path)}${CSS_SUFFIX}`
+        const registered = CSS_MODULE_PATHS.get(id)
+        if (registered !== undefined && registered !== path) {
+          throw new Error(`CSS module basename collision: ${basename(path)}`)
+        }
+        CSS_MODULE_PATHS.set(id, path)
+        return id
       },
       async load(id: string) {
-        if (!id.startsWith(CSS_PREFIX)) return null
-        const path = id.slice(CSS_PREFIX.length, -CSS_SUFFIX.length)
+        const path = CSS_MODULE_PATHS.get(id)
+        if (path === undefined) return null
         this.addWatchFile(path)
         const source = await readFile(path)
         const result = transform({

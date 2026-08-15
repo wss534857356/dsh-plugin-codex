@@ -40,7 +40,7 @@ pnpm run check
 将生成的 tarball 安装到 Harness profile：
 
 ```sh
-dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.14.tgz
+dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.15.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
