@@ -49,6 +49,8 @@ export interface CodexSessionStep {
   discard(): Promise<void>
 }
 
+type TurnPayload = Omit<CodexAppServerTurnRequest, 'reasoningEffort' | 'signal'>
+
 function appendedItem(
   previous: readonly JsonValue[],
   current: readonly JsonValue[],
@@ -85,13 +87,22 @@ function matchingToolResult(
   return results.find(result => result.callId === callId && result.output === item.output)
 }
 
-async function coldTurn(request: CodexSessionRequest): Promise<CodexAppServerTurnRequest> {
+function turnRequest(
+  request: CodexSessionRequest,
+  payload: TurnPayload,
+): CodexAppServerTurnRequest {
   return {
     ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
-    injectedItems: await request.loadInjectedHistory(),
-    input: [],
+    ...payload,
     ...(request.signal === undefined ? {} : { signal: request.signal }),
   }
+}
+
+async function coldTurn(request: CodexSessionRequest): Promise<CodexAppServerTurnRequest> {
+  return turnRequest(request, {
+    injectedItems: await request.loadInjectedHistory(),
+    input: [],
+  })
 }
 
 class SessionStep implements CodexSessionStep {
@@ -173,20 +184,12 @@ class SessionLease {
     if (previous.kind === 'idle') {
       const input = userInput(suffix)
       if (input !== undefined) {
-        turn = {
-          ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
-          input,
-          ...(request.signal === undefined ? {} : { signal: request.signal }),
-        }
+        turn = turnRequest(request, { input })
       }
     } else {
       const toolResult = matchingToolResult(suffix, previous.callId, request.toolResults)
       if (toolResult !== undefined) {
-        turn = {
-          ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
-          toolResult,
-          ...(request.signal === undefined ? {} : { signal: request.signal }),
-        }
+        turn = turnRequest(request, { toolResult })
       }
     }
     if (turn === undefined) return undefined
