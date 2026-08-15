@@ -36,12 +36,12 @@ pnpm run check
 Install the generated tarball into a Harness profile:
 
 ```sh
-dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.6.tgz
+dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.7.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
 
-The bundle registers provider `codex-local` and model `gpt-5.6-sol`. Select it in the Models UI. Installation does not replace the profile's default model automatically.
+The bundle registers provider `codex-local` and every model shown by the pinned App Server's default picker: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark`. Select one in the Models UI. Installation does not replace the profile's default model automatically. App Server routes marked as hidden are not added to the selector.
 
 Harness profiles set `autoInstallPeers: false`, so installation may report missing peer dependencies. At boot, the profile module fallback supplies those peers from the current Harness installation so the plugin shares its Cordis and service instances.
 
@@ -56,7 +56,7 @@ Later profile patch layers can replace the `llm-codex-app-server` row. A replace
 | `provider` | `codex-local` | Harness provider route. |
 | `displayName` | `Codex (local login)` | Selector label. |
 | `modelProvider` | `openai` | Codex App Server model-provider id. |
-| `models` | GPT-5.6 Sol catalog entry | Advisory model metadata and reasoning choices. Unlisted safe model ids remain routable. |
+| `models` | Seven visible App Server catalog entries | Advisory model metadata and reasoning choices for the pinned App Server. Unlisted safe model ids remain routable. |
 | `timeoutMs` | `300000` | Wall-clock limit for one App Server turn. |
 | `disposeGraceMs` | `3000` | Process-tree termination grace. |
 | `maxJsonRpcLineBytes` | `4194304` | Maximum bytes accepted for one newline-delimited App Server JSON-RPC message. Parsed messages do not count toward a cumulative stdout limit. |
@@ -77,7 +77,7 @@ Example override:
     modelProvider: openai
     models:
       - id: gpt-5.6-sol
-        name: GPT-5.6 Sol
+        name: GPT-5.6-Sol
         contextWindow: 258400
         reasoningEfforts: [low, medium, high, xhigh, max, ultra]
         defaultReasoningEffort: low
@@ -95,7 +95,8 @@ Example override:
 ## Compatibility and limitations
 
 - The protocol baseline is Codex CLI `0.147.0`; the dependency and runtime handshake are pinned because the experimental App Server protocol is version-sensitive.
-- The default `258400` context capacity is the effective window reported by the pinned App Server for `gpt-5.6-sol`; deployments may override model metadata when their route reports a different limit.
+- The default effective context capacity is `258400` for the GPT-5.4 through GPT-5.6 entries and `121600` for `gpt-5.3-codex-spark`, as reported by the pinned App Server catalog. Deployments may override model metadata when their route reports a different limit.
+- The default model catalog contains the seven non-hidden routes returned by `model/list` for the pinned App Server `0.147.0`. Hidden work-mode and automatic-review routes remain manually routable but are excluded from the user selector.
 - Codex co-owns the model-visible instructions and tool catalog. The keyless wire test records the extra permission, primary-agent, collaboration, environment, interaction, and code-mode layers that remain after supported thread overrides.
 - Code Mode remains enabled because `gpt-5.6-sol` uses it to dispatch App Server dynamic tools. Optional native integrations are disabled where that does not break this dispatch path.
 - Native Codex actions may still occur. They run in a private empty working directory under a read-only sandbox with approvals set to `never`; their lifecycle snapshots are displayed as provider trajectory, and approval or interaction requests are safely declined unless the protocol can answer them without user authority.

@@ -27,14 +27,38 @@ describe('plugin composition', () => {
       id: 'codex-local',
       name: 'Codex (local login)',
     })
-    expect(await ctx.llm.listModels('codex-local')).toEqual(expect.arrayContaining([
+    const models = await ctx.llm.listModels('codex-local')
+    expect(models.map(model => model.id)).toEqual([
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+      'gpt-5.3-codex-spark',
+    ])
+    expect(models).toEqual(expect.arrayContaining([
       expect.objectContaining({
         provider: 'codex-local',
-        id: 'gpt-5.6-sol',
-        name: 'GPT-5.6 Sol',
+        id: 'gpt-5.6-terra',
+        name: 'GPT-5.6-Terra',
+        inputModalities: ['text'],
+      }),
+      expect.objectContaining({
+        provider: 'codex-local',
+        id: 'gpt-5.3-codex-spark',
+        name: 'GPT-5.3-Codex-Spark',
         inputModalities: ['text'],
       }),
     ]))
+    await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-5.6-terra')).resolves.toMatchObject({
+      context: { contextWindow: 258_400 },
+      reasoning: { defaultEffort: 'medium' },
+    })
+    await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-5.3-codex-spark')).resolves.toMatchObject({
+      context: { contextWindow: 121_600 },
+      reasoning: { defaultEffort: 'high' },
+    })
   })
 
   it('rejects an explicitly empty model catalog', async () => {

@@ -63,14 +63,64 @@ export interface Config {
   env?: Record<string, string>
 }
 
-const DEFAULT_MODELS = [{
-  id: 'gpt-5.6-sol',
-  name: 'GPT-5.6 Sol',
-  description: 'Codex CLI model reached through the local account session.',
-  contextWindow: 258_400,
-  reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
-  defaultReasoningEffort: 'low',
-}]
+const DEFAULT_MODELS = [
+  {
+    id: 'gpt-5.6-sol',
+    name: 'GPT-5.6-Sol',
+    description: 'Latest frontier agentic coding model.',
+    contextWindow: 258_400,
+    reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    defaultReasoningEffort: 'low',
+  },
+  {
+    id: 'gpt-5.6-terra',
+    name: 'GPT-5.6-Terra',
+    description: 'Balanced agentic coding model for everyday work.',
+    contextWindow: 258_400,
+    reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    defaultReasoningEffort: 'medium',
+  },
+  {
+    id: 'gpt-5.6-luna',
+    name: 'GPT-5.6-Luna',
+    description: 'Fast and affordable agentic coding model.',
+    contextWindow: 258_400,
+    reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    defaultReasoningEffort: 'medium',
+  },
+  {
+    id: 'gpt-5.5',
+    name: 'GPT-5.5',
+    description: 'Frontier model for complex coding, research, and real-world work.',
+    contextWindow: 258_400,
+    reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+    defaultReasoningEffort: 'medium',
+  },
+  {
+    id: 'gpt-5.4',
+    name: 'GPT-5.4',
+    description: 'Strong model for everyday coding.',
+    contextWindow: 258_400,
+    reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+    defaultReasoningEffort: 'medium',
+  },
+  {
+    id: 'gpt-5.4-mini',
+    name: 'GPT-5.4-Mini',
+    description: 'Small, fast, and cost-efficient model for simpler coding tasks.',
+    contextWindow: 258_400,
+    reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+    defaultReasoningEffort: 'medium',
+  },
+  {
+    id: 'gpt-5.3-codex-spark',
+    name: 'GPT-5.3-Codex-Spark',
+    description: 'Ultra-fast coding model.',
+    contextWindow: 121_600,
+    reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+    defaultReasoningEffort: 'high',
+  },
+]
 
 const modelSchema = z.object({
   id: z.string().required(),
