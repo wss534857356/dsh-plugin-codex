@@ -9,43 +9,43 @@
           - id: gpt-5.6-sol
             name: GPT-5.6-Sol
             description: Latest frontier agentic coding model.
-            contextWindow: 258400
+            contextWindow: 1050000
             reasoningEfforts: [low, medium, high, xhigh, max, ultra]
             defaultReasoningEffort: low
           - id: gpt-5.6-terra
             name: GPT-5.6-Terra
             description: Balanced agentic coding model for everyday work.
-            contextWindow: 258400
+            contextWindow: 1050000
             reasoningEfforts: [low, medium, high, xhigh, max, ultra]
             defaultReasoningEffort: medium
           - id: gpt-5.6-luna
             name: GPT-5.6-Luna
             description: Fast and affordable agentic coding model.
-            contextWindow: 258400
+            contextWindow: 1050000
             reasoningEfforts: [low, medium, high, xhigh, max]
             defaultReasoningEffort: medium
           - id: gpt-5.5
             name: GPT-5.5
             description: Frontier model for complex coding, research, and real-world work.
-            contextWindow: 258400
+            contextWindow: 1050000
             reasoningEfforts: [low, medium, high, xhigh]
             defaultReasoningEffort: medium
           - id: gpt-5.4
             name: GPT-5.4
             description: Strong model for everyday coding.
-            contextWindow: 258400
+            contextWindow: 1050000
             reasoningEfforts: [low, medium, high, xhigh]
             defaultReasoningEffort: medium
           - id: gpt-5.4-mini
             name: GPT-5.4-Mini
             description: Small, fast, and cost-efficient model for simpler coding tasks.
-            contextWindow: 258400
+            contextWindow: 400000
             reasoningEfforts: [low, medium, high, xhigh]
             defaultReasoningEffort: medium
           - id: gpt-5.3-codex-spark
             name: GPT-5.3-Codex-Spark
             description: Ultra-fast coding model.
-            contextWindow: 121600
+            contextWindow: 128000
             reasoningEfforts: [low, medium, high, xhigh]
             defaultReasoningEffort: high
         timeoutMs: 300000

@@ -36,7 +36,7 @@ pnpm run check
 Install the generated tarball into a Harness profile:
 
 ```sh
-dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.7.tgz
+dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.8.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
@@ -78,7 +78,7 @@ Example override:
     models:
       - id: gpt-5.6-sol
         name: GPT-5.6-Sol
-        contextWindow: 258400
+        contextWindow: 1050000
         reasoningEfforts: [low, medium, high, xhigh, max, ultra]
         defaultReasoningEffort: low
     timeoutMs: 600000
@@ -95,7 +95,7 @@ Example override:
 ## Compatibility and limitations
 
 - The protocol baseline is Codex CLI `0.147.0`; the dependency and runtime handshake are pinned because the experimental App Server protocol is version-sensitive.
-- The default effective context capacity is `258400` for the GPT-5.4 through GPT-5.6 entries and `121600` for `gpt-5.3-codex-spark`, as reported by the pinned App Server catalog. Deployments may override model metadata when their route reports a different limit.
+- The default catalog exposes each model's full context window: `1050000` for GPT-5.4, GPT-5.5, and the GPT-5.6 family; `400000` for `gpt-5.4-mini`; and `128000` for `gpt-5.3-codex-spark`. The pinned App Server may report a smaller effective working window in usage notifications. A deployment that enforces that smaller limit can override model metadata; a provider-confirmed context overflow remains eligible for Harness compaction and retry.
 - The default model catalog contains the seven non-hidden routes returned by `model/list` for the pinned App Server `0.147.0`. Hidden work-mode and automatic-review routes remain manually routable but are excluded from the user selector.
 - Codex co-owns the model-visible instructions and tool catalog. The keyless wire test records the extra permission, primary-agent, collaboration, environment, interaction, and code-mode layers that remain after supported thread overrides.
 - Code Mode remains enabled because `gpt-5.6-sol` uses it to dispatch App Server dynamic tools. Optional native integrations are disabled where that does not break this dispatch path.

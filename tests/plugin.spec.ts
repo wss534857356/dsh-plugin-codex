@@ -52,11 +52,15 @@ describe('plugin composition', () => {
       }),
     ]))
     await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-5.6-terra')).resolves.toMatchObject({
-      context: { contextWindow: 258_400 },
+      context: { contextWindow: 1_050_000 },
+      reasoning: { defaultEffort: 'medium' },
+    })
+    await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-5.4-mini')).resolves.toMatchObject({
+      context: { contextWindow: 400_000 },
       reasoning: { defaultEffort: 'medium' },
     })
     await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-5.3-codex-spark')).resolves.toMatchObject({
-      context: { contextWindow: 121_600 },
+      context: { contextWindow: 128_000 },
       reasoning: { defaultEffort: 'high' },
     })
   })
