@@ -30,6 +30,10 @@ const WORKDIR_PREFIX = 'dsh-codex-app-server-'
 const HARNESS_COMPACTION_THRESHOLD = Number.MAX_SAFE_INTEGER
 const TIMEOUT_REASON = Symbol('codex-app-server-timeout')
 const CONSUMER_REASON = Symbol('codex-app-server-consumer-stop')
+const CODEX_ENABLED_FEATURES = [
+  'image_generation',
+  'view_image',
+] as const
 const CODEX_DISABLED_FEATURES = [
   'apps',
   'browser_use',
@@ -37,7 +41,6 @@ const CODEX_DISABLED_FEATURES = [
   'browser_use_full_cdp_access',
   'computer_use',
   'hooks',
-  'image_generation',
   'in_app_browser',
   'mcp_2026_07_28',
   'multi_agent',
@@ -50,7 +53,6 @@ const CODEX_DISABLED_FEATURES = [
   'standalone_web_search',
   'tool_call_mcp_elicitation',
   'unified_exec',
-  'view_image',
 ] as const
 
 /** Complete input for one stateless App Server turn. */
@@ -120,6 +122,7 @@ export function codexCliEntry(): string {
 
 /** Build the fixed, non-shell App Server argv. */
 export function codexAppServerArgv(): string[] {
+  const enabled = CODEX_ENABLED_FEATURES.flatMap(feature => ['--enable', feature])
   const disabled = CODEX_DISABLED_FEATURES.flatMap(feature => ['--disable', feature])
   return [
     process.execPath,
@@ -135,6 +138,7 @@ export function codexAppServerArgv(): string[] {
     'web_search="disabled"',
     '-c',
     `model_auto_compact_token_limit=${String(HARNESS_COMPACTION_THRESHOLD)}`,
+    ...enabled,
     ...disabled,
   ]
 }
@@ -318,7 +322,7 @@ export class CodexAppServerRunner implements CodexAppServerRunnerPort {
         clientInfo: {
           name: 'deepseek-harness',
           title: 'DeepSeek Harness',
-          version: '0.1.11',
+          version: '0.1.12',
         },
         capabilities: {
           experimentalApi: true,

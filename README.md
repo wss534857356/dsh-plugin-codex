@@ -36,7 +36,7 @@ pnpm run check
 Install the generated tarball into a Harness profile:
 
 ```sh
-dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.11.tgz
+dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.12.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
@@ -98,7 +98,7 @@ Example override:
 - The default catalog exposes each model's full context window: `1050000` for GPT-5.4, GPT-5.5, and the GPT-5.6 family; `400000` for `gpt-5.4-mini`; and `128000` for `gpt-5.3-codex-spark`. The pinned App Server may report a smaller effective working window in usage notifications. A deployment that enforces that smaller limit can override model metadata; a provider-confirmed context overflow remains eligible for Harness compaction and retry.
 - The default model catalog contains the seven non-hidden routes returned by `model/list` for the pinned App Server `0.147.0`. Hidden work-mode and automatic-review routes remain manually routable but are excluded from the user selector.
 - Codex co-owns the model-visible instructions and tool catalog. The keyless wire test records the extra permission, primary-agent, collaboration, environment, interaction, and code-mode layers that remain after supported thread overrides.
-- Code Mode remains enabled because `gpt-5.6-sol` uses it to dispatch App Server dynamic tools. Optional native integrations are disabled where that does not break this dispatch path.
+- Code Mode remains enabled because `gpt-5.6-sol` uses it to dispatch App Server dynamic tools. Codex-native image generation and image viewing remain enabled so Codex's `imagegen` skill retains its required tools; unrelated optional native integrations remain disabled.
 - Native Codex actions may still occur. They run in a private empty working directory under a read-only sandbox with approvals set to `never`; their lifecycle snapshots are displayed as provider trajectory, and approval or interaction requests are safely declined unless the protocol can answer them without user authority.
 - Discovered instruction sources are shown in the `thread/start` lifecycle report. A non-empty report is disclosure, not a request failure. Codex-generated context that is absent from this list is reported separately as `context/injected`.
 - The provider accepts text input. Image input is rejected before process startup.
@@ -111,7 +111,7 @@ Example override:
 
 ## Development
 
-The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound request. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts the implemented ownership split. [ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) records how raw actions, provider context, replay, and Harness tool calls remain distinct. [ADR 0004](docs/adr/0004-render-codex-trajectory-in-the-browser-plugin.md) records the client renderer shadow used by the out-of-tree bundle. [ADR 0005](docs/adr/0005-coalesce-stateless-codex-replay.md) bounds cold replay reconstruction by provider identity. [ADR 0006](docs/adr/0006-reuse-disposable-session-threads.md) defines exact session continuation and disposable cache ownership. [ADR 0007](docs/adr/0007-namespace-harness-dynamic-tools.md) makes the App Server namespace the tool-ownership label.
+The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound request. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts the implemented ownership split. [ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) records how raw actions, provider context, replay, and Harness tool calls remain distinct. [ADR 0004](docs/adr/0004-render-codex-trajectory-in-the-browser-plugin.md) records the client renderer shadow used by the out-of-tree bundle. [ADR 0005](docs/adr/0005-coalesce-stateless-codex-replay.md) bounds cold replay reconstruction by provider identity. [ADR 0006](docs/adr/0006-reuse-disposable-session-threads.md) defines exact session continuation and disposable cache ownership. [ADR 0007](docs/adr/0007-namespace-harness-dynamic-tools.md) makes the App Server namespace the tool-ownership label. [ADR 0008](docs/adr/0008-retain-native-image-tools.md) keeps the native image tools required by Codex's image skill.
 
 ```sh
 pnpm run typecheck

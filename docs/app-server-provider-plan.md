@@ -20,7 +20,7 @@ The proof boundary is the decoded request emitted by the pinned Codex client. Th
 
 Each Harness model request gets one managed App Server subprocess and one ephemeral thread. Keeping requests stateless makes the Harness session log authoritative and prevents provider history from diverging from replayed history.
 
-1. Start the pinned Codex App Server with controllable user configuration effects overridden, optional native integrations disabled where compatible with dynamic-tool dispatch, analytics disabled, and a private empty working directory. Keep Code Mode available because `gpt-5.6-sol` uses it for dynamic tools.
+1. Start the pinned Codex App Server with controllable user configuration effects overridden, unrelated optional native integrations disabled, stable image generation and image viewing enabled for the native `imagegen` skill, analytics disabled, and a private empty working directory. Keep Code Mode available because `gpt-5.6-sol` uses it for dynamic tools.
 2. Complete the App Server initialization handshake with the experimental API capability required by dynamic tools.
 3. Start an ephemeral thread with:
    - `baseInstructions` set to the exact Harness system prompt;

@@ -161,6 +161,11 @@ describe('Codex App Server runner', () => {
     expect(argv).toContain('analytics.enabled=false')
     expect(argv).toContain('web_search="disabled"')
     expect(argv).toContain(`model_auto_compact_token_limit=${String(Number.MAX_SAFE_INTEGER)}`)
+    const enabledFeatures = argv.flatMap((argument, index) => argument === '--enable' ? [argv[index + 1]] : [])
+    const disabledFeatures = argv.flatMap((argument, index) => argument === '--disable' ? [argv[index + 1]] : [])
+    expect(enabledFeatures).toEqual(expect.arrayContaining(['image_generation', 'view_image']))
+    expect(disabledFeatures).not.toContain('image_generation')
+    expect(disabledFeatures).not.toContain('view_image')
     expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox')
   })
 
@@ -190,7 +195,7 @@ describe('Codex App Server runner', () => {
       expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
     ]))
     expect(messages.find(message => message.method === 'initialize')).toMatchObject({
-      params: { clientInfo: { name: 'deepseek-harness', version: '0.1.11' } },
+      params: { clientInfo: { name: 'deepseek-harness', version: '0.1.12' } },
     })
     expect(messages.find(message => message.method === 'thread/start')).toMatchObject({
       params: {
