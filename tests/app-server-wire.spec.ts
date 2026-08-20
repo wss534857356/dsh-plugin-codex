@@ -14,6 +14,7 @@ const HOSTILE_CONFIG_SENTINEL = 'HOSTILE_CODEX_CONFIG_SENTINEL'
 const TOOL_CALL_ID = 'harness-call-1'
 const TOOL_RESULT_SENTINEL = 'HARNESS_TOOL_RESULT_SENTINEL'
 const MODEL = 'gpt-5.6-sol'
+const IMAGE_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
 
 interface CapturedRequest {
   readonly url: string
@@ -128,7 +129,7 @@ async function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 describe('Codex App Server wire ownership', () => {
-  it('replays injected history through an empty turn while retaining Codex-owned layers', { timeout: 30_000 }, async () => {
+  it('replays injected history through an empty turn while retaining Codex-owned layers', { timeout: 60_000 }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-codex-wire-proof-'))
     const home = join(root, 'codex-home')
     const workspace = join(root, 'workspace')
@@ -281,7 +282,10 @@ describe('Codex App Server wire ownership', () => {
         {
           type: 'message',
           role: 'user',
-          content: [{ type: 'input_text', text: 'USER_REQUEST_SENTINEL' }],
+          content: [
+            { type: 'input_text', text: 'USER_REQUEST_SENTINEL' },
+            { type: 'input_image', image_url: IMAGE_DATA_URL, detail: 'auto' },
+          ],
         },
         {
           type: 'function_call',
@@ -311,6 +315,7 @@ describe('Codex App Server wire ownership', () => {
         role: 'user',
         content: expect.arrayContaining([
           expect.objectContaining({ type: 'input_text', text: 'USER_REQUEST_SENTINEL' }),
+          expect.objectContaining({ type: 'input_image', image_url: IMAGE_DATA_URL }),
         ]),
       }),
       expect.objectContaining({
@@ -330,6 +335,7 @@ describe('Codex App Server wire ownership', () => {
     const wire = JSON.stringify(request)
     expect(wire).toContain('HARNESS_SYSTEM_SENTINEL')
     expect(wire).toContain('USER_REQUEST_SENTINEL')
+    expect(wire).toContain(IMAGE_DATA_URL)
     expect(wire).toContain(TOOL_CALL_ID)
     expect(wire).toContain(TOOL_RESULT_SENTINEL)
     expect(wire).toContain(HARNESS_TOOL)

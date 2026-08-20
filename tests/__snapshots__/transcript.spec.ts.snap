@@ -114,7 +114,12 @@ exports[`assembled Harness transcript > keeps Codex actions distinct from Harnes
       {
         "toolResult": {
           "callId": "call-read-1",
-          "output": "hello",
+          "contentItems": [
+            {
+              "text": "hello",
+              "type": "inputText",
+            },
+          ],
           "success": true,
         },
       },

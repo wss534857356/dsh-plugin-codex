@@ -54,6 +54,31 @@ export function validateTurnRequest(request: CodexAppServerTurnRequest): void {
       'UNSUPPORTED_REASONING_EFFORT',
     )
   }
+  for (const [groupIndex, group] of (request.steeringInputs ?? []).entries()) {
+    if (group.length === 0) {
+      throw new LlmError(`Codex steeringInputs[${String(groupIndex)}] is empty`, 'INVALID_CONTINUATION')
+    }
+    group.forEach((value, index) => {
+      jsonValue(value, `steeringInputs[${String(groupIndex)}][${String(index)}]`)
+    })
+  }
+  if (request.toolResult === undefined) return
+  if (request.toolResult.callId.length === 0 || request.toolResult.contentItems.length === 0) {
+    throw new LlmError('Codex tool result is incomplete', 'INVALID_CONTINUATION')
+  }
+  for (const [index, value] of request.toolResult.contentItems.entries()) {
+    const item = object(value, `toolResult.contentItems[${index}]`)
+    const validText = item.type === 'inputText' && typeof item.text === 'string'
+    const validImage = item.type === 'inputImage'
+      && typeof item.imageUrl === 'string'
+      && /^data:image\/(?:png|jpeg|webp|gif);base64,/u.test(item.imageUrl)
+    if (!validText && !validImage) {
+      throw new LlmError(
+        `Codex tool result contains invalid contentItems[${index}]`,
+        'INVALID_CONTINUATION',
+      )
+    }
+  }
 }
 
 function combinedFailure(primary: LlmError, cleanup: unknown): LlmError {
@@ -211,7 +236,9 @@ export class ManagedCodexThread implements CodexAppServerThreadPort {
         input,
         ...(request.reasoningEffort === undefined ? {} : { effort: request.reasoningEffort }),
       }), 'turn/start result')
-      this.state = { kind: 'running', turnId: threadId(started.turn, 'turn/start turn') }
+      const turnId = threadId(started.turn, 'turn/start turn')
+      this.state = { kind: 'running', turnId }
+      await this.steer(turnId, request.steeringInputs)
       return
     }
     if (this.state.kind !== 'tool') {
@@ -226,10 +253,29 @@ export class ManagedCodexThread implements CodexAppServerThreadPort {
       throw new LlmError('Codex tool result does not match the pending callback', 'INVALID_CONTINUATION')
     }
     await this.options.connection.respond(this.state.request.id, {
-      contentItems: [{ type: 'inputText', text: result.output }],
+      contentItems: result.contentItems.map((item, index) => (
+        jsonValue(item, `toolResult.contentItems[${index}]`)
+      )),
       success: result.success,
     })
-    this.state = { kind: 'running', turnId: this.state.turnId }
+    const turnId = this.state.turnId
+    this.state = { kind: 'running', turnId }
+    await this.steer(turnId, request.steeringInputs)
+  }
+
+  private async steer(
+    turnId: string,
+    groups: readonly (readonly unknown[])[] | undefined,
+  ): Promise<void> {
+    for (const [groupIndex, group] of (groups ?? []).entries()) {
+      await this.options.connection.request('turn/steer', {
+        threadId: this.threadId,
+        expectedTurnId: turnId,
+        input: group.map((value, index) => (
+          jsonValue(value, `steeringInputs[${String(groupIndex)}][${String(index)}]`)
+        )),
+      })
+    }
   }
 
   private assertToolRequest(event: PendingToolRequest, turnId: string): void {

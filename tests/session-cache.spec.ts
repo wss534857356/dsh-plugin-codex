@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type {
   CodexAppServerEvent,
   CodexAppServerRequest,
@@ -8,6 +9,7 @@ import type {
   CodexAppServerTurnRequest,
   JsonValue,
 } from '../src/runner.ts'
+import { imageAttachmentMarker } from '../src/images.ts'
 import { CodexSessionCache } from '../src/session-cache.ts'
 import type { CodexSessionRequest } from '../src/session-cache.ts'
 
@@ -23,6 +25,15 @@ const assistant = (text: string): JsonValue => ({
   role: 'assistant',
   content: [{ type: 'output_text', text }],
 })
+
+const IMAGE_REF = {
+  attachmentId: AttachmentId('sha256:input-image'),
+  mediaType: 'image/png' as const,
+  bytes: 68,
+  width: 1,
+  height: 1,
+  name: 'input.png',
+}
 
 class FakeThread implements CodexAppServerThreadPort {
   readonly threadId: string
@@ -75,6 +86,18 @@ function request(
     },
     history,
     loadInjectedHistory: () => Promise.resolve(history),
+    loadUserInput: content => Promise.resolve(content.map((item) => {
+      if (item === null || typeof item !== 'object' || Array.isArray(item)
+        || item.type !== 'input_text' || typeof item.text !== 'string') {
+        throw new Error('test user input is not text')
+      }
+      return { type: 'text', text: item.text, text_elements: [] }
+    })),
+    loadToolResult: result => Promise.resolve({
+      callId: result.callId,
+      contentItems: [{ type: 'inputText', text: typeof result.output === 'string' ? result.output : JSON.stringify(result.output) }],
+      success: result.success,
+    }),
     toolResults: [],
     ...overrides,
   }
@@ -112,6 +135,87 @@ describe('CodexSessionCache', () => {
     await second.discard()
   })
 
+  it('starts one turn and steers later inbox messages without rebuilding the thread', async () => {
+    const { cache, runner, threads } = fixture()
+    const firstUser = user('first')
+    const firstAnswer = assistant('answer')
+    const first = await cache.begin(request('session-inbox', [firstUser]))
+    first.commit([firstUser, firstAnswer])
+
+    const report = user('subagent report')
+    const settled = user('subagent settled')
+    const second = await cache.begin(request(
+      'session-inbox',
+      [firstUser, firstAnswer, report, settled],
+    ))
+
+    expect(runner.open).toHaveBeenCalledOnce()
+    expect(threads[0]?.requests[1]).toMatchObject({
+      input: [{ type: 'text', text: 'subagent report', text_elements: [] }],
+      steeringInputs: [[{ type: 'text', text: 'subagent settled', text_elements: [] }]],
+    })
+    await second.discard()
+  })
+
+  it('hydrates only one exact warm image message into turn input', async () => {
+    const { cache, runner, threads } = fixture()
+    const firstUser = user('first')
+    const firstAnswer = assistant('answer')
+    const first = await cache.begin(request('session-image', [firstUser]))
+    first.commit([firstUser, firstAnswer])
+
+    const marker = imageAttachmentMarker(IMAGE_REF)
+    const nextUser: JsonValue = {
+      type: 'message',
+      role: 'user',
+      content: [
+        { type: 'input_text', text: 'inspect' },
+        { type: 'input_image', image_url: marker, detail: 'auto' },
+      ],
+    }
+    const loadUserInput = vi.fn(async () => [
+      { type: 'text', text: 'inspect', text_elements: [] },
+      { type: 'image', url: 'data:image/png;base64,AAAA', detail: 'auto' },
+    ])
+    const second = await cache.begin(request('session-image', [firstUser, firstAnswer, nextUser], {
+      loadUserInput,
+    }))
+
+    expect(runner.open).toHaveBeenCalledOnce()
+    expect(loadUserInput).toHaveBeenCalledWith(nextUser.content)
+    expect(threads[0]?.requests[1]).toMatchObject({
+      input: [
+        { type: 'text', text: 'inspect', text_elements: [] },
+        { type: 'image', url: 'data:image/png;base64,AAAA', detail: 'auto' },
+      ],
+    })
+    expect(threads[0]?.requests[1]?.injectedItems).toBeUndefined()
+    await second.discard()
+  })
+
+  it('reserves a warm lease before asynchronous image hydration', async () => {
+    const { cache } = fixture()
+    const firstUser = user('first')
+    const firstAnswer = assistant('answer')
+    const first = await cache.begin(request('session-reservation', [firstUser]))
+    first.commit([firstUser, firstAnswer])
+    const nextUser: JsonValue = {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_image', image_url: imageAttachmentMarker(IMAGE_REF) }],
+    }
+    const hydration = Promise.withResolvers<readonly JsonValue[]>()
+    const nextRequest = request('session-reservation', [firstUser, firstAnswer, nextUser], {
+      loadUserInput: () => hydration.promise,
+    })
+    const pending = cache.begin(nextRequest)
+
+    await expect(cache.begin(nextRequest)).rejects.toMatchObject({ code: 'INVALID_CONTINUATION' })
+    hydration.resolve([{ type: 'image', url: 'data:image/png;base64,AAAA' }])
+    const second = await pending
+    await second.discard()
+  })
+
   it('resolves the exact pending App Server tool callback on the same thread', async () => {
     const { cache, runner, threads } = fixture()
     const firstUser = user('read it')
@@ -136,10 +240,124 @@ describe('CodexSessionCache', () => {
 
     expect(runner.open).toHaveBeenCalledOnce()
     expect(threads[0]?.requests[1]).toMatchObject({
-      toolResult: { callId: 'call-1', output: 'contents', success: true },
+      toolResult: { callId: 'call-1', contentItems: [{ type: 'inputText', text: 'contents' }], success: true },
     })
     expect(threads[0]?.requests[1]?.input).toBeUndefined()
     await second.discard()
+  })
+
+  it('resolves a pending tool result and steers appended inbox messages on the same thread', async () => {
+    const { cache, runner, threads } = fixture()
+    const firstUser = user('delegate')
+    const call: JsonValue = {
+      type: 'function_call',
+      call_id: 'call-inbox',
+      namespace: 'deepseek_harness',
+      name: 'subagent',
+      arguments: '{}',
+    }
+    const output: JsonValue = {
+      type: 'function_call_output',
+      call_id: 'call-inbox',
+      output: 'started',
+    }
+    const first = await cache.begin(request('session-tool-inbox', [firstUser]))
+    first.commit([firstUser, call], 'call-inbox')
+
+    const second = await cache.begin(request(
+      'session-tool-inbox',
+      [firstUser, call, output, user('subagent report'), user('subagent settled')],
+      { toolResults: [{ callId: 'call-inbox', output: 'started', success: true }] },
+    ))
+
+    expect(runner.open).toHaveBeenCalledOnce()
+    expect(threads[0]?.requests[1]).toMatchObject({
+      toolResult: {
+        callId: 'call-inbox',
+        contentItems: [{ type: 'inputText', text: 'started' }],
+        success: true,
+      },
+      steeringInputs: [
+        [{ type: 'text', text: 'subagent report', text_elements: [] }],
+        [{ type: 'text', text: 'subagent settled', text_elements: [] }],
+      ],
+    })
+    await second.discard()
+  })
+
+  it('hydrates an exact structured image tool result only for the pending callback', async () => {
+    const { cache, runner, threads } = fixture()
+    const firstUser = user('first')
+    const call: JsonValue = {
+      type: 'function_call',
+      call_id: 'call-image',
+      namespace: 'deepseek_harness',
+      name: 'read_image',
+      arguments: '{}',
+    }
+    const durableOutput: JsonValue = [
+      { type: 'input_text', text: 'image result' },
+      { type: 'input_image', image_url: imageAttachmentMarker(IMAGE_REF) },
+    ]
+    const output: JsonValue = {
+      type: 'function_call_output',
+      call_id: 'call-image',
+      output: durableOutput,
+    }
+    const first = await cache.begin(request('session-tool-image', [firstUser]))
+    first.commit([firstUser, call], 'call-image')
+
+    const loadToolResult = vi.fn(async () => ({
+      callId: 'call-image',
+      contentItems: [
+        { type: 'inputText', text: 'image result' },
+        { type: 'inputImage', imageUrl: 'data:image/png;base64,AAAA' },
+      ],
+      success: true,
+    }))
+    const second = await cache.begin(request('session-tool-image', [firstUser, call, output], {
+      loadToolResult,
+      toolResults: [{ callId: 'call-image', output: durableOutput, success: true }],
+    }))
+
+    expect(runner.open).toHaveBeenCalledOnce()
+    expect(loadToolResult).toHaveBeenCalledWith({
+      callId: 'call-image',
+      output: durableOutput,
+      success: true,
+    })
+    expect(threads[0]?.requests[1]).toMatchObject({
+      toolResult: {
+        callId: 'call-image',
+        contentItems: [
+          { type: 'inputText', text: 'image result' },
+          { type: 'inputImage', imageUrl: 'data:image/png;base64,AAAA' },
+        ],
+        success: true,
+      },
+    })
+    await second.discard()
+  })
+
+  it('retires a warm lease when image hydration fails', async () => {
+    const { cache, threads } = fixture()
+    const firstUser = user('first')
+    const firstAnswer = assistant('answer')
+    const first = await cache.begin(request('session-hydration-failure', [firstUser]))
+    first.commit([firstUser, firstAnswer])
+    const nextUser: JsonValue = {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_image', image_url: imageAttachmentMarker(IMAGE_REF) }],
+    }
+
+    await expect(cache.begin(request(
+      'session-hydration-failure',
+      [firstUser, firstAnswer, nextUser],
+      { loadUserInput: vi.fn(async () => { throw new Error('attachment missing') }) },
+    ))).rejects.toThrow('attachment missing')
+
+    expect(threads[0]?.dispose).toHaveBeenCalledOnce()
   })
 
   it('rebuilds from the complete request after repair or Harness compaction replaces history', async () => {

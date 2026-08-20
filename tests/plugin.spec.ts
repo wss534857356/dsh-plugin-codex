@@ -42,7 +42,7 @@ describe('plugin composition', () => {
         provider: 'codex-local',
         id: 'gpt-5.6-terra',
         name: 'GPT-5.6-Terra',
-        inputModalities: ['text'],
+        inputModalities: ['text', 'image'],
       }),
       expect.objectContaining({
         provider: 'codex-local',
@@ -52,6 +52,7 @@ describe('plugin composition', () => {
       }),
     ]))
     await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-5.6-terra')).resolves.toMatchObject({
+      inputModalities: ['text', 'image'],
       context: { contextWindow: 1_050_000 },
       reasoning: { defaultEffort: 'medium' },
     })
@@ -63,6 +64,25 @@ describe('plugin composition', () => {
       context: { contextWindow: 128_000 },
       reasoning: { defaultEffort: 'high' },
     })
+  })
+
+  it('defaults custom routes to text-only and rejects duplicate modalities', async () => {
+    const ctx = await context()
+    await ctx.plugin(CodexAppServer, {
+      models: [{ id: 'custom-model', name: 'Custom' }],
+    })
+    await expect(ctx.llm.resolveModelInfo('codex-local', 'custom-model')).resolves.toMatchObject({
+      inputModalities: ['text'],
+    })
+
+    const invalid = await context()
+    await expect(invalid.plugin(CodexAppServer, {
+      models: [{
+        id: 'invalid-model',
+        name: 'Invalid',
+        inputModalities: ['text', 'text'],
+      }],
+    })).rejects.toThrow('invalid inputModalities')
   })
 
   it('rejects an explicitly empty model catalog', async () => {

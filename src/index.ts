@@ -3,6 +3,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-session'
+import type { ModelModality } from '@deepseek-ai/dsh-llm'
 import z from '@deepseek-ai/schemastery'
 import { CodexAppServerAdapter } from './adapter.ts'
 import type { CodexModel } from './adapter.ts'
@@ -11,7 +12,7 @@ import { CodexAppServerRunner } from './runner.ts'
 
 export { CodexAppServerAdapter } from './adapter.ts'
 export type { CodexAdapterOptions, CodexModel } from './adapter.ts'
-export { NativeImageBridge } from './images.ts'
+export { boundRequestImageHistory, imageAttachmentMarker, NativeImageBridge } from './images.ts'
 export type { CodexImageStorePort, ExternalizedCodexEvent } from './images.ts'
 export {
   AppServerEventMapper,
@@ -30,6 +31,7 @@ export {
 } from './runner.ts'
 export type {
   CodexAppServerEvent,
+  CodexAppServerHydratedToolResult,
   CodexAppServerRequest,
   CodexAppServerRunnerOptions,
   CodexAppServerRunnerPort,
@@ -53,12 +55,14 @@ export interface Config {
     name?: string
     description?: string
     contextWindow?: number
+    inputModalities?: ModelModality[]
     reasoningEfforts?: string[]
     defaultReasoningEffort?: string
   }>
   timeoutMs?: number
   disposeGraceMs?: number
   maxJsonRpcLineBytes?: number
+  maxRequestImageBytes?: number
   maxStderrBytes?: number
   maxRetries?: number
   maxCachedSessions?: number
@@ -66,12 +70,15 @@ export interface Config {
   env?: Record<string, string>
 }
 
+const MODEL_MODALITIES = ['text', 'image'] as const
+
 const DEFAULT_MODELS = [
   {
     id: 'gpt-5.6-sol',
     name: 'GPT-5.6-Sol',
     description: 'Latest frontier agentic coding model.',
     contextWindow: 1_050_000,
+    inputModalities: ['text', 'image'],
     reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     defaultReasoningEffort: 'low',
   },
@@ -80,6 +87,7 @@ const DEFAULT_MODELS = [
     name: 'GPT-5.6-Terra',
     description: 'Balanced agentic coding model for everyday work.',
     contextWindow: 1_050_000,
+    inputModalities: ['text', 'image'],
     reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     defaultReasoningEffort: 'medium',
   },
@@ -88,6 +96,7 @@ const DEFAULT_MODELS = [
     name: 'GPT-5.6-Luna',
     description: 'Fast and affordable agentic coding model.',
     contextWindow: 1_050_000,
+    inputModalities: ['text', 'image'],
     reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     defaultReasoningEffort: 'medium',
   },
@@ -96,6 +105,7 @@ const DEFAULT_MODELS = [
     name: 'GPT-5.5',
     description: 'Frontier model for complex coding, research, and real-world work.',
     contextWindow: 1_050_000,
+    inputModalities: ['text', 'image'],
     reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
     defaultReasoningEffort: 'medium',
   },
@@ -104,6 +114,7 @@ const DEFAULT_MODELS = [
     name: 'GPT-5.4',
     description: 'Strong model for everyday coding.',
     contextWindow: 1_050_000,
+    inputModalities: ['text', 'image'],
     reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
     defaultReasoningEffort: 'medium',
   },
@@ -112,6 +123,7 @@ const DEFAULT_MODELS = [
     name: 'GPT-5.4-Mini',
     description: 'Small, fast, and cost-efficient model for simpler coding tasks.',
     contextWindow: 400_000,
+    inputModalities: ['text', 'image'],
     reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
     defaultReasoningEffort: 'medium',
   },
@@ -120,16 +132,21 @@ const DEFAULT_MODELS = [
     name: 'GPT-5.3-Codex-Spark',
     description: 'Ultra-fast coding model.',
     contextWindow: 128_000,
+    inputModalities: ['text'],
     reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
     defaultReasoningEffort: 'high',
   },
-]
+] satisfies Array<Required<NonNullable<Config['models']>[number]>>
+
+const DEFAULT_MAX_JSON_RPC_LINE_BYTES = 8 * 1024 * 1024
+const DEFAULT_MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024
 
 const modelSchema = z.object({
   id: z.string().required(),
   name: z.string(),
   description: z.string(),
   contextWindow: z.number().step(1).min(1),
+  inputModalities: z.array(z.union(MODEL_MODALITIES)).min(1).default(['text']),
   reasoningEfforts: z.array(z.string()),
   defaultReasoningEffort: z.string(),
 })
@@ -141,7 +158,8 @@ export const Config: z<Config> = z.object({
   models: z.array(modelSchema).default(DEFAULT_MODELS),
   timeoutMs: z.number().max(2_147_483_647).default(300_000),
   disposeGraceMs: z.number().max(2_147_483_647).default(3_000),
-  maxJsonRpcLineBytes: z.number().step(1).min(1).default(4 * 1024 * 1024),
+  maxJsonRpcLineBytes: z.number().step(1).min(1).default(DEFAULT_MAX_JSON_RPC_LINE_BYTES),
+  maxRequestImageBytes: z.number().step(1).min(1).default(DEFAULT_MAX_REQUEST_IMAGE_BYTES),
   maxStderrBytes: z.number().step(1).min(1).default(64 * 1024),
   maxRetries: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(0),
   maxCachedSessions: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(8),
@@ -157,6 +175,7 @@ interface ResolvedConfig {
   readonly timeoutMs: number
   readonly disposeGraceMs: number
   readonly maxJsonRpcLineBytes: number
+  readonly maxRequestImageBytes: number
   readonly maxStderrBytes: number
   readonly maxRetries: number
   readonly maxCachedSessions: number
@@ -172,7 +191,8 @@ function resolveConfig(config: Config): ResolvedConfig {
   const modelProvider = config.modelProvider ?? 'openai'
   const timeoutMs = config.timeoutMs ?? 300_000
   const disposeGraceMs = config.disposeGraceMs ?? 3_000
-  const maxJsonRpcLineBytes = config.maxJsonRpcLineBytes ?? 4 * 1024 * 1024
+  const maxJsonRpcLineBytes = config.maxJsonRpcLineBytes ?? DEFAULT_MAX_JSON_RPC_LINE_BYTES
+  const maxRequestImageBytes = config.maxRequestImageBytes ?? DEFAULT_MAX_REQUEST_IMAGE_BYTES
   const maxStderrBytes = config.maxStderrBytes ?? 64 * 1024
   const maxRetries = config.maxRetries ?? 0
   const maxCachedSessions = config.maxCachedSessions ?? 8
@@ -191,6 +211,9 @@ function resolveConfig(config: Config): ResolvedConfig {
   }
   if (!Number.isSafeInteger(maxJsonRpcLineBytes) || maxJsonRpcLineBytes <= 0) {
     throw new Error('llm-codex-app-server: maxJsonRpcLineBytes must be a positive safe integer')
+  }
+  if (!Number.isSafeInteger(maxRequestImageBytes) || maxRequestImageBytes <= 0) {
+    throw new Error('llm-codex-app-server: maxRequestImageBytes must be a positive safe integer')
   }
   if (!Number.isSafeInteger(maxStderrBytes) || maxStderrBytes <= 0) {
     throw new Error('llm-codex-app-server: maxStderrBytes must be a positive safe integer')
@@ -214,6 +237,12 @@ function resolveConfig(config: Config): ResolvedConfig {
       throw new Error(`llm-codex-app-server: invalid or duplicate model id ${JSON.stringify(candidate.id)}`)
     }
     seen.add(candidate.id)
+    const inputModalities = [...(candidate.inputModalities ?? ['text'])]
+    if (inputModalities.length === 0
+      || inputModalities.some(modality => !MODEL_MODALITIES.includes(modality))
+      || new Set(inputModalities).size !== inputModalities.length) {
+      throw new Error(`llm-codex-app-server: model ${JSON.stringify(candidate.id)} has invalid inputModalities`)
+    }
     const efforts = [...(candidate.reasoningEfforts ?? [])]
     if (efforts.some(effort => !SAFE_REASONING_EFFORT.test(effort)) || new Set(efforts).size !== efforts.length) {
       throw new Error(`llm-codex-app-server: model ${JSON.stringify(candidate.id)} has invalid reasoningEfforts`)
@@ -226,6 +255,7 @@ function resolveConfig(config: Config): ResolvedConfig {
       name: candidate.name ?? candidate.id,
       ...(candidate.description === undefined ? {} : { description: candidate.description }),
       ...(candidate.contextWindow === undefined ? {} : { contextWindow: candidate.contextWindow }),
+      inputModalities,
       reasoningEfforts: efforts,
       ...(candidate.defaultReasoningEffort === undefined
         ? {}
@@ -240,6 +270,7 @@ function resolveConfig(config: Config): ResolvedConfig {
     timeoutMs,
     disposeGraceMs,
     maxJsonRpcLineBytes,
+    maxRequestImageBytes,
     maxStderrBytes,
     maxRetries,
     maxCachedSessions,
@@ -268,6 +299,7 @@ export function apply(ctx: Context, config: Config): void {
     modelProvider: resolved.modelProvider,
     models: resolved.models,
     maxRetries: resolved.maxRetries,
+    maxRequestImageBytes: resolved.maxRequestImageBytes,
     maxCachedSessions: resolved.maxCachedSessions,
     sessionIdleTimeoutMs: resolved.sessionIdleTimeoutMs,
     onCleanupError: reportCleanupError,

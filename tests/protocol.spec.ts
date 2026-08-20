@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { CallId, MessageId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import {
@@ -41,6 +42,148 @@ function skillCatalog(names: readonly string[]): GenerateOptions['messages'][num
 }
 
 describe('App Server protocol translation', () => {
+  const image = {
+    attachmentId: AttachmentId('image-1'),
+    mediaType: 'image/png' as const,
+    bytes: 123,
+    width: 20,
+    height: 10,
+    name: 'diagram.png',
+  }
+  const marker = {
+    kind: 'dsh-image-attachment',
+    version: 1,
+    attachment: {
+      attachmentId: 'image-1',
+      mediaType: 'image/png',
+      bytes: 123,
+      width: 20,
+      height: 10,
+      name: 'diagram.png',
+    },
+  }
+
+  it.each([
+    [[{ type: 'image', attachment: image }], [{ type: 'input_image', image_url: marker }]],
+    [
+      [
+        { type: 'text', text: 'before' },
+        { type: 'image', attachment: image },
+        { type: 'text', text: 'after' },
+      ],
+      [
+        { type: 'input_text', text: 'before' },
+        { type: 'input_image', image_url: marker },
+        { type: 'input_text', text: 'after' },
+      ],
+    ],
+  ])('preserves image-bearing user content as one ordered message', (content, expected) => {
+    const history = appServerHistory(options({
+      messages: [{
+        id: MessageId('user-images'),
+        role: 'user',
+        source: { kind: 'user' },
+        content: content as GenerateOptions['messages'][number]['content'],
+      }],
+    }))
+    expect(history).toEqual([{ type: 'message', role: 'user', content: expected }])
+    expect(JSON.stringify(history)).not.toContain('base64')
+    expect(JSON.stringify(history)).not.toContain('data:image')
+  })
+
+  it('encodes nested image-bearing tool results as ordered structured output', () => {
+    const callId = CallId('call-images')
+    const history = appServerHistory(options({
+      messages: [{
+        id: MessageId('tool-images'),
+        role: 'user',
+        source: { kind: 'tool', callId },
+        content: [{
+          type: 'tool-result',
+          toolCallId: callId,
+          content: [
+            { type: 'text', text: 'before' },
+            {
+              type: 'tool-result',
+              toolCallId: CallId('nested-call'),
+              content: [
+                { type: 'image', attachment: image },
+                { type: 'text', text: 'inside' },
+              ],
+              isError: true,
+            },
+            { type: 'text', text: 'after' },
+          ],
+        }],
+      }],
+    }))
+    const output = [
+      { type: 'input_text', text: 'before' },
+      { type: 'input_text', text: 'Tool error:\n' },
+      { type: 'input_image', image_url: marker },
+      { type: 'input_text', text: 'inside' },
+      { type: 'input_text', text: 'after' },
+    ]
+    expect(history).toEqual([{
+      type: 'function_call_output', call_id: 'call-images', output,
+    }])
+    expect(appServerToolResults(options({
+      messages: [{
+        id: MessageId('tool-images'), role: 'user', source: { kind: 'tool', callId },
+        content: [{
+          type: 'tool-result', toolCallId: callId,
+          content: [{ type: 'image', attachment: image }],
+        }],
+      }],
+    }))).toEqual([{ callId: 'call-images', output: [
+      { type: 'input_image', image_url: marker },
+    ], success: true }])
+    expect(JSON.stringify(history)).not.toContain('base64')
+  })
+
+  it('matches pending callbacks against the exact budgeted tool output', () => {
+    const callId = CallId('call-budgeted-image')
+    const request = options({
+      messages: [{
+        id: MessageId('tool-budgeted-image'),
+        role: 'user',
+        source: { kind: 'tool', callId },
+        content: [{
+          type: 'tool-result',
+          toolCallId: callId,
+          content: [{ type: 'image', attachment: image }],
+        }],
+      }],
+    })
+    const modelHistory = [{
+      type: 'function_call_output',
+      call_id: String(callId),
+      output: [{ type: 'input_text', text: 'bounded omission' }],
+    }]
+
+    expect(appServerToolResults(request, modelHistory)).toEqual([{
+      callId: String(callId),
+      output: [{ type: 'input_text', text: 'bounded omission' }],
+      success: true,
+    }])
+  })
+
+  it.each(['assistant', 'system'] as const)(
+    'rejects non-replayed %s image content',
+    (role) => {
+      expect(() => appServerHistory(options({
+        messages: [{
+          id: MessageId(`${role}-image`),
+          role,
+          source: role === 'assistant'
+            ? { kind: 'model', provider: 'other-provider', model: 'other-model' }
+            : { kind: 'system' },
+          content: [{ type: 'image', attachment: image }],
+        } as GenerateOptions['messages'][number]],
+      }))).toThrowError(expect.objectContaining({ code: 'UNSUPPORTED_CONTENT' }))
+    },
+  )
+
   it('preserves ordered Harness messages, tool calls, and tool results', () => {
     const callId = CallId('call-1')
     const history = appServerHistory(options({
@@ -135,7 +278,7 @@ describe('App Server protocol translation', () => {
     }])
   })
 
-  it('uses same-provider raw replay items instead of reconstructing assistant output', () => {
+  it('accepts pre-rc.8 direct replay state from existing sessions', () => {
     const raw = {
       type: 'reasoning',
       encrypted_content: 'opaque',
@@ -157,6 +300,77 @@ describe('App Server protocol translation', () => {
     expect(history).toEqual([raw])
   })
 
+  it('uses rc.8 enveloped replay items instead of reconstructed assistant output', () => {
+    const raw = {
+      type: 'reasoning',
+      encrypted_content: 'opaque',
+      summary: [{ type: 'summary_text', text: 'summary' }],
+    }
+    const history = appServerHistory(options({
+      messages: [{
+        id: MessageId('assistant-envelope'),
+        role: 'assistant',
+        source: {
+          kind: 'model',
+          provider: 'codex-local',
+          model: 'gpt-5.6-sol',
+          replayState: {
+            response: {
+              kind: 'codex-app-server',
+              version: 4,
+              items: [raw],
+              contextItems: [],
+            },
+          },
+        },
+        content: [{ type: 'text', text: 'reconstructed text must not replace raw state' }],
+      }],
+    }))
+
+    expect(history).toEqual([raw])
+  })
+
+  it('removes unpaired custom Code Mode items from reconstructed replay', () => {
+    const pairedCall = {
+      type: 'custom_tool_call',
+      call_id: 'paired-call',
+      name: 'exec',
+      input: 'return 1',
+    }
+    const pairedOutput = {
+      type: 'custom_tool_call_output',
+      call_id: 'paired-call',
+      output: [{ type: 'input_text', text: '1' }],
+    }
+    const history = appServerHistory(options({
+      messages: [{
+        id: MessageId('assistant-custom-replay'),
+        role: 'assistant',
+        source: {
+          kind: 'model',
+          provider: 'codex-local',
+          model: 'gpt-5.6-sol',
+          replayState: {
+            response: {
+              kind: 'codex-app-server',
+              version: 4,
+              items: [
+                { type: 'custom_tool_call', call_id: 'orphan-call', name: 'exec', input: 'pending' },
+                pairedCall,
+                pairedOutput,
+                { type: 'custom_tool_call_output', call_id: 'orphan-output', output: [] },
+              ],
+              contextItems: [],
+            },
+          },
+        },
+        content: [{ type: 'text', text: 'fallback must not be used' }],
+      }],
+    }))
+
+    expect(history).toEqual([pairedCall, pairedOutput])
+  })
+
   it('removes legacy native compaction state from reconstructed replay', () => {
     const answer = {
       type: 'message',
@@ -173,14 +387,16 @@ describe('App Server protocol translation', () => {
           provider: 'codex-local',
           model: 'gpt-5.6-sol',
           replayState: {
-            kind: 'codex-app-server',
-            version: 4,
-            items: [
-              { type: 'compaction', encrypted_content: 'opaque' },
-              { type: 'context_compaction', encrypted_content: 'opaque-context' },
-              answer,
-            ],
-            contextItems: [],
+            response: {
+              kind: 'codex-app-server',
+              version: 4,
+              items: [
+                { type: 'compaction', encrypted_content: 'opaque' },
+                { type: 'context_compaction', encrypted_content: 'opaque-context' },
+                answer,
+              ],
+              contextItems: [],
+            },
           },
         },
         content: [{ type: 'text', text: 'answer' }],
@@ -222,7 +438,9 @@ describe('App Server protocol translation', () => {
       kind: 'model' as const,
       provider: 'codex-local',
       model: 'gpt-5.6-sol',
-      replayState: { kind: 'codex-app-server', version: 4, items, contextItems: [] },
+      replayState: {
+        response: { kind: 'codex-app-server', version: 4, items, contextItems: [] },
+      },
     })
 
     const history = appServerHistory(options({
@@ -633,6 +851,7 @@ describe('App Server protocol translation', () => {
     ['quota exceeded', 'QUOTA'],
     ['status 429 too many requests', 'RATE_LIMIT'],
     ['status 503 service unavailable', 'SERVER'],
+    ['request timed out', 'TIMEOUT'],
     ['connection reset', 'TRANSPORT'],
   ])('classifies %s as %s', (message, code) => {
     expect(codexFailureCode(message)).toBe(code)

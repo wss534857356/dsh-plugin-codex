@@ -75,10 +75,17 @@ export interface CodexAppServerThreadRequest {
   readonly signal?: AbortSignal
 }
 
-/** Harness result that resolves one pending App Server dynamic-tool callback. */
+/** Durable Harness result used to match one pending App Server callback exactly. */
 export interface CodexAppServerToolResult {
   readonly callId: string
-  readonly output: string
+  readonly output: JsonValue
+  readonly success: boolean
+}
+
+/** Transport-ready result that resolves one pending App Server dynamic-tool callback. */
+export interface CodexAppServerHydratedToolResult {
+  readonly callId: string
+  readonly contentItems: readonly JsonValue[]
   readonly success: boolean
 }
 
@@ -87,7 +94,9 @@ export interface CodexAppServerTurnRequest {
   readonly reasoningEffort?: string
   readonly injectedItems?: readonly JsonValue[]
   readonly input?: readonly JsonValue[]
-  readonly toolResult?: CodexAppServerToolResult
+  /** Additional user messages steered into the active turn in order. */
+  readonly steeringInputs?: readonly (readonly JsonValue[])[]
+  readonly toolResult?: CodexAppServerHydratedToolResult
   readonly signal?: AbortSignal
 }
 
@@ -322,7 +331,7 @@ export class CodexAppServerRunner implements CodexAppServerRunnerPort {
         clientInfo: {
           name: 'deepseek-harness',
           title: 'DeepSeek Harness',
-          version: '0.1.16',
+          version: '0.1.17',
         },
         capabilities: {
           experimentalApi: true,

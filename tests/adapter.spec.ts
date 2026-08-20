@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import { CallId, MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { CallId, MessageId, OFFLOADED_IMAGE_TEXT, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { CodexAppServerAdapter } from '../src/adapter.ts'
@@ -26,6 +26,33 @@ function request(overrides: Partial<GenerateOptions> = {}): GenerateOptions {
       content: [{ type: 'text', text: 'hello' }],
     }],
     ...overrides,
+  }
+}
+
+const INPUT_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+const INPUT_PNG = Buffer.from(INPUT_PNG_BASE64, 'base64')
+const INPUT_IMAGE_REF = {
+  attachmentId: AttachmentId('sha256:input-image'),
+  mediaType: 'image/png' as const,
+  bytes: INPUT_PNG.byteLength,
+  width: 1,
+  height: 1,
+  name: 'input.png',
+}
+
+function inputImageStore(): CodexImageStorePort {
+  return {
+    imageLimits: {
+      maxImageBytes: 5 * 1024 * 1024,
+      maxImagesPerMessage: 8,
+      maxMessageImageBytes: 20 * 1024 * 1024,
+      maxImagePixels: 20_000_000,
+      maxImageDimension: 2_000,
+      mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+    },
+    validateImage: vi.fn(async () => {}),
+    saveImage: vi.fn(async () => INPUT_IMAGE_REF),
+    readImage: vi.fn(async ref => ({ ref, data: INPUT_PNG })),
   }
 }
 
@@ -81,6 +108,7 @@ function answerEvents(
 function instance(
   runner: CodexAppServerRunnerPort,
   resolveAttachments: () => CodexImageStorePort | undefined = () => undefined,
+  maxRequestImageBytes = 20 * 1024 * 1024,
 ): CodexAppServerAdapter {
   return new CodexAppServerAdapter({
     provider: 'codex-local',
@@ -90,10 +118,12 @@ function instance(
       id: 'gpt-5.6-sol',
       name: 'GPT-5.6 Sol',
       contextWindow: 272_000,
+      inputModalities: ['text', 'image'],
       reasoningEfforts: ['low', 'high'],
       defaultReasoningEffort: 'low',
     }],
     maxRetries: 0,
+    maxRequestImageBytes,
     maxCachedSessions: 8,
     sessionIdleTimeoutMs: 600_000,
     onCleanupError: vi.fn(),
@@ -105,6 +135,7 @@ function instance(
 function adapter(
   events: readonly CodexAppServerEvent[],
   resolveAttachments: () => CodexImageStorePort | undefined = () => undefined,
+  maxRequestImageBytes = 20 * 1024 * 1024,
 ) {
   const stream = vi.fn((input: CodexAppServerRequest): AsyncIterable<CodexAppServerEvent> => {
     return (async function * () {
@@ -118,11 +149,14 @@ function adapter(
   }
   return {
     stream,
-    adapter: instance(runner, resolveAttachments),
+    adapter: instance(runner, resolveAttachments, maxRequestImageBytes),
   }
 }
 
-function cachedAdapter(turns: readonly (readonly CodexAppServerEvent[])[]) {
+function cachedAdapter(
+  turns: readonly (readonly CodexAppServerEvent[])[],
+  resolveAttachments: () => CodexImageStorePort | undefined = () => undefined,
+) {
   const requests: CodexAppServerTurnRequest[] = []
   const thread: CodexAppServerThreadPort = {
     threadId: 'thread-1',
@@ -138,7 +172,7 @@ function cachedAdapter(turns: readonly (readonly CodexAppServerEvent[])[]) {
   const open = vi.fn(async (_input: CodexAppServerThreadRequest) => thread)
   const oneShot = vi.fn((_input: CodexAppServerRequest) => (async function * () {})())
   return {
-    adapter: instance({ open, stream: oneShot }),
+    adapter: instance({ open, stream: oneShot }, resolveAttachments),
     open,
     oneShot,
     requests,
@@ -170,14 +204,18 @@ describe('CodexAppServerAdapter', () => {
       provider: 'codex-local',
       id: 'gpt-5.6-sol',
       name: 'GPT-5.6 Sol',
-      inputModalities: ['text'],
+      inputModalities: ['text', 'image'],
     }])
     expect(await instance.resolveModel('codex-local', 'gpt-5.6-sol')).toMatchObject({
+      inputModalities: ['text', 'image'],
       context: { contextWindow: 272_000 },
       reasoning: {
         efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
         defaultEffort: 'low',
       },
+    })
+    expect(await instance.resolveModel('codex-local', 'uncatalogued')).toMatchObject({
+      inputModalities: ['text'],
     })
   })
 
@@ -325,19 +363,94 @@ describe('CodexAppServerAdapter', () => {
       type: 'finish',
       reason: { kind: 'stop' },
       replayState: {
-        kind: 'codex-app-server',
-        version: 4,
-        items: [
-          expect.objectContaining({ type: 'reasoning' }),
-          expect.objectContaining({ type: 'message' }),
-        ],
-        contextItems: [expect.objectContaining({
-          type: 'message',
-          role: 'developer',
-          content: [{ type: 'input_text', text: 'Codex-owned context' }],
-        })],
+        response: {
+          kind: 'codex-app-server',
+          version: 4,
+          items: [
+            expect.objectContaining({ type: 'reasoning' }),
+            expect.objectContaining({ type: 'message' }),
+          ],
+          contextItems: [expect.objectContaining({
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'Codex-owned context' }],
+          })],
+        },
       },
     })
+  })
+
+  it('hydrates durable user images only in the one-shot App Server request', async () => {
+    const store = inputImageStore()
+    const fixture = adapter(answerEvents('image-input', 'described'), () => store)
+    const base = request()
+    const user = base.messages[0]!
+    const chunks = await collect(fixture.adapter, request({
+      messages: [{
+        ...user,
+        content: [
+          { type: 'text', text: 'before' },
+          { type: 'image', attachment: INPUT_IMAGE_REF },
+          { type: 'text', text: 'after' },
+        ],
+      }],
+    }))
+
+    expect(fixture.stream).toHaveBeenCalledOnce()
+    expect(fixture.stream.mock.calls[0]?.[0].history).toEqual([{
+      type: 'message',
+      role: 'user',
+      content: [
+        { type: 'input_text', text: 'before' },
+        { type: 'input_image', image_url: `data:image/png;base64,${INPUT_PNG_BASE64}` },
+        { type: 'input_text', text: 'after' },
+      ],
+    }])
+    expect(store.readImage).toHaveBeenCalledOnce()
+    expect(chunks.some(chunk => chunk.type === 'block-end' && chunk.block.type === 'image')).toBe(false)
+  })
+
+  it('offloads oldest images before reading or encoding the one-shot request', async () => {
+    const store = inputImageStore()
+    const fixture = adapter(answerEvents('bounded', 'bounded answer'), () => store, 100)
+    const first = { ...INPUT_IMAGE_REF, attachmentId: AttachmentId('sha256:first'), name: 'first.png' }
+    const second = { ...INPUT_IMAGE_REF, attachmentId: AttachmentId('sha256:second'), name: 'second.png' }
+    const base = request()
+    await collect(fixture.adapter, request({
+      messages: [{
+        ...base.messages[0]!,
+        content: [
+          { type: 'image', attachment: first },
+          { type: 'image', attachment: second },
+        ],
+      }],
+    }))
+
+    expect(fixture.stream.mock.calls[0]?.[0].history).toEqual([{
+      type: 'message',
+      role: 'user',
+      content: [
+        { type: 'input_text', text: OFFLOADED_IMAGE_TEXT },
+        { type: 'input_image', image_url: `data:image/png;base64,${INPUT_PNG_BASE64}` },
+      ],
+    }])
+    expect(store.readImage).toHaveBeenCalledOnce()
+    expect(store.readImage).toHaveBeenCalledWith(second, undefined)
+  })
+
+  it('rejects image input for an uncatalogued text-only route before opening App Server', async () => {
+    const store = inputImageStore()
+    const fixture = adapter([], () => store)
+    const base = request()
+    await expect(collect(fixture.adapter, request({
+      model: 'uncatalogued',
+      messages: [{
+        ...base.messages[0]!,
+        content: [{ type: 'image', attachment: INPUT_IMAGE_REF }],
+      }],
+    }))).rejects.toMatchObject({ code: 'UNSUPPORTED_CONTENT' })
+    expect(fixture.stream).not.toHaveBeenCalled()
+    expect(store.readImage).not.toHaveBeenCalled()
   })
 
   it('publishes native generated images without retaining their base64 in blocks or replay state', async () => {
@@ -357,6 +470,7 @@ describe('CodexAppServerAdapter', () => {
         maxImagesPerMessage: 8,
         maxMessageImageBytes: 20 * 1024 * 1024,
         maxImagePixels: 20_000_000,
+        maxImageDimension: 2_000,
         mediaTypes: ['image/png'],
       },
       validateImage: vi.fn(async () => {}),
@@ -408,17 +522,19 @@ describe('CodexAppServerAdapter', () => {
     const finish = chunks.findLast(chunk => chunk.type === 'finish')
     expect(finish).toMatchObject({
       replayState: {
-        version: 4,
-        items: [
-          expect.objectContaining({
-            type: 'function_call_output',
-            output: expect.arrayContaining([expect.objectContaining({
-              type: 'input_image',
-              image_url: expect.objectContaining({ kind: 'dsh-image-attachment' }),
-            })]),
-          }),
-          expect.objectContaining({ type: 'message', role: 'assistant' }),
-        ],
+        response: {
+          version: 4,
+          items: [
+            expect.objectContaining({
+              type: 'function_call_output',
+              output: expect.arrayContaining([expect.objectContaining({
+                type: 'input_image',
+                image_url: expect.objectContaining({ kind: 'dsh-image-attachment' }),
+              })]),
+            }),
+            expect.objectContaining({ type: 'message', role: 'assistant' }),
+          ],
+        },
       },
     })
     expect(JSON.stringify(chunks)).not.toContain(base64)
@@ -466,6 +582,52 @@ describe('CodexAppServerAdapter', () => {
       input: [{ type: 'text', text: 'follow up', text_elements: [] }],
     })
     expect(secondChunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    await cached.adapter.dispose()
+  })
+
+  it('hydrates only the appended image message on a warm session thread', async () => {
+    const store = inputImageStore()
+    const cached = cachedAdapter([
+      answerEvents('1', 'first answer'),
+      answerEvents('2', 'image answer'),
+    ], () => store)
+    const firstRequest = request({ sessionId: SessionId('session-image') })
+    const firstChunks = await collect(cached.adapter, firstRequest)
+    const firstAnswer: Message = {
+      id: MessageId('assistant-image-1'),
+      role: 'assistant',
+      source: {
+        kind: 'model',
+        provider: 'codex-local',
+        model: 'gpt-5.6-sol',
+        replayState: replayState(firstChunks),
+      },
+      content: [{ type: 'text', text: 'first answer' }],
+    }
+    const followUp: Message = {
+      id: MessageId('user-image-2'),
+      role: 'user',
+      source: { kind: 'user' },
+      content: [
+        { type: 'text', text: 'inspect' },
+        { type: 'image', attachment: INPUT_IMAGE_REF },
+      ],
+    }
+
+    await collect(cached.adapter, request({
+      sessionId: SessionId('session-image'),
+      messages: [...firstRequest.messages, firstAnswer, followUp],
+    }))
+
+    expect(cached.open).toHaveBeenCalledOnce()
+    expect(cached.requests[1]).toMatchObject({
+      input: [
+        { type: 'text', text: 'inspect', text_elements: [] },
+        { type: 'image', url: `data:image/png;base64,${INPUT_PNG_BASE64}` },
+      ],
+    })
+    expect(cached.requests[1]?.injectedItems).toBeUndefined()
+    expect(store.readImage).toHaveBeenCalledOnce()
     await cached.adapter.dispose()
   })
 
@@ -565,7 +727,8 @@ describe('CodexAppServerAdapter', () => {
         resolution: 'rejected',
       },
     ]
-    const cached = cachedAdapter([toolEvents, answerEvents('1', 'contents received')])
+    const store = inputImageStore()
+    const cached = cachedAdapter([toolEvents, answerEvents('1', 'contents received')], () => store)
     const tools = [{
       name: 'read_file',
       description: 'Read one file.',
@@ -596,7 +759,10 @@ describe('CodexAppServerAdapter', () => {
       content: [{
         type: 'tool-result',
         toolCallId: callId,
-        content: [{ type: 'text', text: 'contents' }],
+        content: [
+          { type: 'text', text: 'contents' },
+          { type: 'image', attachment: INPUT_IMAGE_REF },
+        ],
         isError: false,
       }],
     }
@@ -609,8 +775,17 @@ describe('CodexAppServerAdapter', () => {
 
     expect(cached.open).toHaveBeenCalledOnce()
     expect(cached.requests[1]).toMatchObject({
-      toolResult: { callId: 'call-1', output: 'contents', success: true },
+      toolResult: {
+        callId: 'call-1',
+        contentItems: [
+          { type: 'inputText', text: 'contents' },
+          { type: 'inputImage', imageUrl: `data:image/png;base64,${INPUT_PNG_BASE64}` },
+        ],
+        success: true,
+      },
     })
+    expect(store.readImage).toHaveBeenCalledOnce()
+    expect(secondChunks.some(chunk => chunk.type === 'block-end' && chunk.block.type === 'image')).toBe(false)
     expect(secondChunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
     await cached.adapter.dispose()
   })
@@ -672,16 +847,82 @@ describe('CodexAppServerAdapter', () => {
       type: 'finish',
       reason: { kind: 'tool-calls' },
       replayState: {
-        items: [expect.objectContaining({
-          type: 'function_call',
-          call_id: 'call-1',
-          namespace: 'deepseek_harness',
-        })],
+        response: {
+          items: [expect.objectContaining({
+            type: 'function_call',
+            call_id: 'call-1',
+            namespace: 'deepseek_harness',
+          })],
+        },
       },
     })
     expect(chunks.flatMap(chunk => chunk.type === 'block-end' && chunk.block.type === 'codex-action'
       ? [chunk.block]
       : [])).toEqual([])
+  })
+
+  it('drops a suspended Code Mode call from cold replay while retaining the Harness callback', async () => {
+    const events: CodexAppServerEvent[] = [
+      {
+        kind: 'notification',
+        method: 'rawResponseItem/completed',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          item: {
+            type: 'custom_tool_call',
+            id: 'code-mode-item-1',
+            call_id: 'code-mode-call-1',
+            name: 'exec',
+            status: 'completed',
+            input: 'await tools.read_file({ path: "a.txt" })',
+          },
+        },
+      },
+      {
+        kind: 'server-request',
+        id: 'rpc-code-mode-1',
+        method: 'item/tool/call',
+        params: {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          callId: 'call-code-mode-1',
+          namespace: 'deepseek_harness',
+          tool: 'read_file',
+          arguments: { path: 'a.txt' },
+        },
+        resolution: 'rejected',
+      },
+    ]
+    const { adapter: instance } = adapter(events)
+    const chunks = await collect(instance, request({
+      tools: [{
+        name: 'read_file',
+        description: 'Read one file.',
+        parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      }],
+    }))
+    const finish = chunks.at(-1)
+
+    expect(finish).toMatchObject({
+      type: 'finish',
+      replayState: {
+        response: {
+          items: [expect.objectContaining({
+            type: 'function_call',
+            call_id: 'call-code-mode-1',
+            namespace: 'deepseek_harness',
+          })],
+        },
+      },
+    })
+    expect(JSON.stringify(finish)).not.toContain('code-mode-call-1')
+    expect(chunks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'block-end',
+        block: expect.objectContaining({ type: 'codex-action', actionType: 'custom_tool_call' }),
+      }),
+    ]))
   })
 
   it('reports raw Code Mode calls and outcomes as Codex actions', async () => {
@@ -761,10 +1002,12 @@ describe('CodexAppServerAdapter', () => {
       type: 'finish',
       reason: { kind: 'stop' },
       replayState: {
-        items: [
-          expect.objectContaining({ type: 'custom_tool_call', call_id: 'native-call-1' }),
-          expect.objectContaining({ type: 'custom_tool_call_output', call_id: 'native-call-1' }),
-        ],
+        response: {
+          items: [
+            expect.objectContaining({ type: 'custom_tool_call', call_id: 'native-call-1' }),
+            expect.objectContaining({ type: 'custom_tool_call_output', call_id: 'native-call-1' }),
+          ],
+        },
       },
     })
     expect(chunks.some(chunk => chunk.type === 'tool-call-delta')).toBe(false)

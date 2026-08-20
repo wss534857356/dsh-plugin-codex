@@ -39,13 +39,6 @@ export const zh = {
   'copied': '已复制',
   'reasoning.title': 'Think',
   'reasoning.running': '思考中',
-  'image.label': '图片',
-  'image.openOriginal': '查看原图',
-  'image.openOriginalLabel': '查看原图：{label}',
-  'image.loading': '正在加载图片',
-  'image.loadFailed': '图片加载失败，点击重试',
-  'image.preview': '原图预览',
-  'image.closePreview': '关闭原图预览',
 } satisfies Record<string, string>
 
 /** Browser dictionary key union. */
@@ -87,13 +80,6 @@ export const en = {
   'copied': 'Copied',
   'reasoning.title': 'Think',
   'reasoning.running': 'Thinking',
-  'image.label': 'Image',
-  'image.openOriginal': 'View original image',
-  'image.openOriginalLabel': 'View original image: {label}',
-  'image.loading': 'Loading image',
-  'image.loadFailed': 'Image failed to load; click to retry',
-  'image.preview': 'Original image preview',
-  'image.closePreview': 'Close original image preview',
 } satisfies Record<CodexUiKey, string>
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {

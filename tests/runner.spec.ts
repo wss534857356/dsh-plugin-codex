@@ -195,7 +195,7 @@ describe('Codex App Server runner', () => {
       expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
     ]))
     expect(messages.find(message => message.method === 'initialize')).toMatchObject({
-      params: { clientInfo: { name: 'deepseek-harness', version: '0.1.16' } },
+      params: { clientInfo: { name: 'deepseek-harness', version: '0.1.17' } },
     })
     expect(messages.find(message => message.method === 'thread/start')).toMatchObject({
       params: {
@@ -343,6 +343,40 @@ describe('Codex App Server runner', () => {
     expect(setup.child.waitForExit).toHaveBeenCalledOnce()
   })
 
+  it('steers additional user messages after starting a warm turn', async () => {
+    const messages: JsonObject[] = []
+    const setup = runner((message, send, sendRaw) => {
+      messages.push(message)
+      if (message.method === 'turn/start') {
+        send({ id: message.id, result: { turn: { id: 'turn-1' } } })
+      } else if (message.method === 'turn/steer') {
+        send({ id: message.id, result: {} })
+        send({ method: 'turn/completed', params: {
+          threadId: 'thread-1',
+          turn: { id: 'turn-1', status: 'completed', error: null },
+        } })
+      } else {
+        standardScript(() => {})(message, send, sendRaw)
+      }
+    })
+
+    const thread = await setup.runner.open(request())
+    await expect(collectTurn(thread, {
+      input: [{ type: 'text', text: 'first', text_elements: [] }],
+      steeringInputs: [[{ type: 'text', text: 'second', text_elements: [] }]],
+    })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
+    ]))
+    expect(messages.find(message => message.method === 'turn/steer')).toMatchObject({
+      params: {
+        threadId: 'thread-1',
+        expectedTurnId: 'turn-1',
+        input: [{ type: 'text', text: 'second', text_elements: [] }],
+      },
+    })
+    await thread.dispose()
+  })
+
   it('holds a dynamic-tool callback across Harness steps and resumes the same turn', async () => {
     const messages: JsonObject[] = []
     const setup = runner((message, send, sendRaw) => {
@@ -363,7 +397,10 @@ describe('Codex App Server runner', () => {
       })(message, send, sendRaw)
       if (message.id === 'server-call-1') {
         expect(message.result).toEqual({
-          contentItems: [{ type: 'inputText', text: 'file text' }],
+          contentItems: [
+            { type: 'inputText', text: 'file text' },
+            { type: 'inputImage', imageUrl: 'data:image/png;base64,AAAA' },
+          ],
           success: true,
         })
         send({ method: 'turn/completed', params: {
@@ -381,11 +418,77 @@ describe('Codex App Server runner', () => {
     expect(setup.child.terminate).not.toHaveBeenCalled()
 
     await expect(collectTurn(thread, {
-      toolResult: { callId: 'call-1', output: 'file text', success: true },
+      toolResult: {
+        callId: 'call-1',
+        contentItems: [
+          { type: 'inputText', text: 'file text' },
+          { type: 'inputImage', imageUrl: 'data:image/png;base64,AAAA' },
+        ],
+        success: true,
+      },
     })).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
     ]))
     expect(messages.filter(message => message.method === 'turn/start')).toHaveLength(1)
+    await thread.dispose()
+  })
+
+  it('responds to a dynamic-tool callback before steering queued inbox messages', async () => {
+    const messages: JsonObject[] = []
+    let steers = 0
+    const setup = runner((message, send, sendRaw) => {
+      messages.push(message)
+      standardScript((write) => {
+        write({
+          id: 'server-call-steer',
+          method: 'item/tool/call',
+          params: {
+            threadId: 'thread-1',
+            turnId: 'turn-1',
+            callId: 'call-steer',
+            namespace: 'deepseek_harness',
+            tool: 'subagent',
+            arguments: {},
+          },
+        })
+      })(message, send, sendRaw)
+      if (message.method === 'turn/steer') {
+        steers += 1
+        send({ id: message.id, result: {} })
+        if (steers === 2) {
+          send({ method: 'turn/completed', params: {
+            threadId: 'thread-1',
+            turn: { id: 'turn-1', status: 'completed', error: null },
+          } })
+        }
+      }
+    })
+
+    const thread = await setup.runner.open(request())
+    await collectTurn(thread, {})
+    await expect(collectTurn(thread, {
+      toolResult: {
+        callId: 'call-steer',
+        contentItems: [{ type: 'inputText', text: 'started' }],
+        success: true,
+      },
+      steeringInputs: [
+        [{ type: 'text', text: 'report', text_elements: [] }],
+        [{ type: 'text', text: 'settled', text_elements: [] }],
+      ],
+    })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
+    ]))
+
+    const responseIndex = messages.findIndex(message => message.id === 'server-call-steer')
+    const steerIndexes = messages.flatMap((message, index) => message.method === 'turn/steer' ? [index] : [])
+    expect(responseIndex).toBeGreaterThan(-1)
+    expect(steerIndexes).toHaveLength(2)
+    expect(steerIndexes.every(index => index > responseIndex)).toBe(true)
+    expect(steerIndexes.map(index => messages[index]?.params)).toEqual([
+      expect.objectContaining({ expectedTurnId: 'turn-1', input: [{ type: 'text', text: 'report', text_elements: [] }] }),
+      expect.objectContaining({ expectedTurnId: 'turn-1', input: [{ type: 'text', text: 'settled', text_elements: [] }] }),
+    ])
     await thread.dispose()
   })
 
@@ -408,7 +511,7 @@ describe('Codex App Server runner', () => {
     await collectTurn(thread, {})
 
     await expect(collectTurn(thread, {
-      toolResult: { callId: 'wrong-call', output: 'file text', success: true },
+      toolResult: { callId: 'wrong-call', contentItems: [{ type: 'inputText', text: 'file text' }], success: true },
     })).rejects.toMatchObject({ code: 'INVALID_CONTINUATION' })
     expect(setup.child.terminate).toHaveBeenCalledOnce()
   })

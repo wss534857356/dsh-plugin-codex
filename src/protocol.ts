@@ -15,6 +15,7 @@ import type {
 } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { CodexAppServerToolResult } from './runner.ts'
+import { imageAttachmentMarker } from './images.ts'
 import { HARNESS_TOOL_NAMESPACE } from './identifiers.ts'
 import { jsonValue, object } from './wire.ts'
 import type { CodexAppServerEvent, JsonObject, JsonValue } from './wire.ts'
@@ -156,17 +157,22 @@ function appServerToolSchema(tool: ToolSchema, skillNames: readonly string[]): J
 
 function replayItems(value: unknown): JsonValue[] | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
-  const candidate = value as JsonObject
+  const envelope = value as JsonObject
+  const response = Object.hasOwn(envelope, 'response') ? envelope.response : envelope
+  if (response === null || typeof response !== 'object' || Array.isArray(response)) return undefined
+  const candidate = response as JsonObject
   if (candidate.kind !== REPLAY_KIND
     || candidate.version !== REPLAY_VERSION
     || !Array.isArray(candidate.items)
     || !Array.isArray(candidate.contextItems)) {
     return undefined
   }
-  candidate.contextItems.forEach((item, index) => { jsonValue(item, `replayState.contextItems[${index}]`) })
-  return candidate.items
-    .map((item, index) => jsonValue(item, `replayState.items[${index}]`))
-    .filter(item => !isNativeCompactionItem(item))
+  candidate.contextItems.forEach((item, index) => {
+    jsonValue(item, `replayState.response.contextItems[${index}]`)
+  })
+  return replayableItems(candidate.items
+    .map((item, index) => jsonValue(item, `replayState.response.items[${index}]`))
+    .filter(item => !isNativeCompactionItem(item)))
 }
 
 function isNativeCompactionItem(value: JsonValue): boolean {
@@ -175,6 +181,31 @@ function isNativeCompactionItem(value: JsonValue): boolean {
     && !Array.isArray(value)
     && typeof value.type === 'string'
     && NATIVE_COMPACTION_ITEM_TYPES.has(value.type)
+}
+
+/**
+ * Keep Code Mode replay only when every custom call has its matching output.
+ * A Harness dynamic callback can suspend the native call across DSH steps; if
+ * exact continuation later fails, that half-finished native invocation cannot
+ * be resumed in a fresh App Server process. The canonical Harness
+ * `function_call`/`function_call_output` pair remains in durable history.
+ */
+function replayableItems(items: readonly JsonValue[]): JsonValue[] {
+  const calls = new Set<string>()
+  const outputs = new Set<string>()
+  for (const item of items) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)
+      || typeof item.call_id !== 'string' || item.call_id.length === 0) continue
+    if (item.type === 'custom_tool_call') calls.add(item.call_id)
+    if (item.type === 'custom_tool_call_output') outputs.add(item.call_id)
+  }
+  return items.filter((item) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)
+      || typeof item.call_id !== 'string') return true
+    if (item.type === 'custom_tool_call') return outputs.has(item.call_id)
+    if (item.type === 'custom_tool_call_output') return calls.has(item.call_id)
+    return true
+  })
 }
 
 const FINGERPRINT_IGNORED_KEYS = new Set([
@@ -297,9 +328,35 @@ function fallbackText(block: ContentBlock): string {
   }
 }
 
-function resultOutput(block: Extract<ContentBlock, { type: 'tool-result' }>): string {
-  const output = block.content.map(fallbackText).join('\n')
-  return block.isError === true ? `Tool error:\n${output}` : output
+function containsImage(block: ContentBlock): boolean {
+  if (block.type === 'image') return true
+  return block.type === 'tool-result' && block.content.some(containsImage)
+}
+
+function structuredResultContent(blocks: readonly ContentBlock[]): JsonValue[] {
+  return blocks.flatMap((block): JsonValue[] => {
+    if (block.type === 'image') {
+      return [{ type: 'input_image', image_url: imageAttachmentMarker(block.attachment) }]
+    }
+    if (block.type === 'tool-result') {
+      const content = structuredResultContent(block.content)
+      return block.isError === true
+        ? [{ type: 'input_text', text: 'Tool error:\n' }, ...content]
+        : content
+    }
+    return [{ type: 'input_text', text: fallbackText(block) }]
+  })
+}
+
+function resultOutput(block: Extract<ContentBlock, { type: 'tool-result' }>): JsonValue {
+  if (!block.content.some(containsImage)) {
+    const output = block.content.map(fallbackText).join('\n')
+    return block.isError === true ? `Tool error:\n${output}` : output
+  }
+  const content = structuredResultContent(block.content)
+  return block.isError === true
+    ? [{ type: 'input_text', text: 'Tool error:\n' }, ...content]
+    : content
 }
 
 function roleFor(role: GenerateOptions['messages'][number]['role']): string {
@@ -308,13 +365,9 @@ function roleFor(role: GenerateOptions['messages'][number]['role']): string {
 
 function encodedHistoryMessage(
   role: GenerateOptions['messages'][number]['role'],
-  text: string,
+  content: readonly JsonValue[],
 ): JsonValue {
-  return {
-    type: 'message',
-    role: roleFor(role),
-    content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }],
-  }
+  return { type: 'message', role: roleFor(role), content: [...content] }
 }
 
 /** Reconstruct the App Server-visible conversation exclusively from the Harness request. */
@@ -334,25 +387,28 @@ export function appServerHistory(options: GenerateOptions): JsonValue[] {
       for (const item of replay) append(item, 'provider')
       continue
     }
-    let text: string[] = []
-    const flushText = (): void => {
-      if (text.length === 0) return
-      append(encodedHistoryMessage(message.role, text.join('\n')), 'harness')
-      text = []
+    let content: JsonValue[] = []
+    const flushContent = (): void => {
+      if (content.length === 0) return
+      append(encodedHistoryMessage(message.role, content), 'harness')
+      content = []
     }
     for (const block of message.content) {
       switch (block.type) {
         case 'text':
-          text.push(block.text)
+          content.push({ type: message.role === 'assistant' ? 'output_text' : 'input_text', text: block.text })
           break
         case 'reasoning':
-          text.push(`[reasoning]\n${block.text}`)
+          content.push({
+            type: message.role === 'assistant' ? 'output_text' : 'input_text',
+            text: `[reasoning]\n${block.text}`,
+          })
           break
         case 'codex-action':
           // Provider trajectory is durable presentation metadata, not assistant-authored history.
           break
         case 'tool-call':
-          flushText()
+          flushContent()
           append({
             type: 'function_call',
             call_id: String(block.id),
@@ -362,7 +418,7 @@ export function appServerHistory(options: GenerateOptions): JsonValue[] {
           }, 'harness')
           break
         case 'tool-result':
-          flushText()
+          flushContent()
           append({
             type: 'function_call_output',
             call_id: String(block.toolCallId),
@@ -370,12 +426,22 @@ export function appServerHistory(options: GenerateOptions): JsonValue[] {
           }, 'harness')
           break
         case 'image':
-          throw new LlmError('Codex App Server provider supports text input only', 'UNSUPPORTED_CONTENT')
+          if (message.role !== 'user') {
+            throw new LlmError(
+              `Codex App Server cannot reconstruct ${message.role} image content without provider replay`,
+              'UNSUPPORTED_CONTENT',
+            )
+          }
+          content.push({ type: 'input_image', image_url: imageAttachmentMarker(block.attachment) })
+          break
         default:
-          text.push(`[${String((block as { type?: unknown }).type)}]\n${JSON.stringify(block)}`)
+          content.push({
+            type: message.role === 'assistant' ? 'output_text' : 'input_text',
+            text: `[${String((block as { type?: unknown }).type)}]\n${JSON.stringify(block)}`,
+          })
       }
     }
-    flushText()
+    flushContent()
   }
   return history
 }
@@ -401,12 +467,25 @@ export function extendAppServerHistory(
 }
 
 /** Extract logged Harness tool outcomes for exact App Server callback continuation. */
-export function appServerToolResults(options: GenerateOptions): CodexAppServerToolResult[] {
+export function appServerToolResults(
+  options: GenerateOptions,
+  modelHistory?: readonly JsonValue[],
+): CodexAppServerToolResult[] {
+  const visibleOutputs = new Map<string, JsonValue>()
+  for (const item of modelHistory ?? []) {
+    if (item !== null && typeof item === 'object' && !Array.isArray(item)
+      && item.type === 'function_call_output'
+      && typeof item.call_id === 'string'
+      && item.output !== undefined) {
+      visibleOutputs.set(item.call_id, item.output)
+    }
+  }
   return options.messages.flatMap(message => message.content.flatMap((block): CodexAppServerToolResult[] => {
     if (block.type !== 'tool-result') return []
+    const callId = String(block.toolCallId)
     return [{
-      callId: String(block.toolCallId),
-      output: resultOutput(block),
+      callId,
+      output: visibleOutputs.get(callId) ?? resultOutput(block),
       success: block.isError !== true,
     }]
   }))
@@ -930,7 +1009,7 @@ export class AppServerEventMapper {
     return {
       kind: REPLAY_KIND,
       version: REPLAY_VERSION,
-      items: [...this.rawItems],
+      items: replayableItems(this.rawItems),
       contextItems: [...this.contextItems],
     }
   }
@@ -949,7 +1028,8 @@ export function codexFailureCode(message: string): string {
   }
   if (/rate.?limit|too many requests|usage limit|status\D*429/i.test(message)) return 'RATE_LIMIT'
   if (/status\D*5\d\d|server error|service unavailable/i.test(message)) return 'SERVER'
-  if (/connection (?:reset|refused|closed)|network error|stream (?:disconnected|closed)|timed? out/i.test(message)) {
+  if (/timed? out|timeout/i.test(message)) return 'TIMEOUT'
+  if (/connection (?:reset|refused|closed)|network error|stream (?:disconnected|closed)/i.test(message)) {
     return 'TRANSPORT'
   }
   return 'CODEX_PROCESS'

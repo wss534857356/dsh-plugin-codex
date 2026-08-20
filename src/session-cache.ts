@@ -7,6 +7,7 @@ import type {
   CodexAppServerRunnerPort,
   CodexAppServerThreadPort,
   CodexAppServerThreadRequest,
+  CodexAppServerHydratedToolResult,
   CodexAppServerToolResult,
   CodexAppServerTurnRequest,
   JsonValue,
@@ -37,6 +38,10 @@ export interface CodexSessionRequest {
   readonly history: readonly JsonValue[]
   /** Resolve provider-ready history only when a new thread must be reconstructed. */
   readonly loadInjectedHistory: () => Promise<readonly JsonValue[]>
+  /** Hydrate one exact appended durable user-message content array for turn/start. */
+  readonly loadUserInput: (content: readonly JsonValue[]) => Promise<readonly JsonValue[]>
+  /** Hydrate one exact durable Harness tool result for the pending callback. */
+  readonly loadToolResult: (result: CodexAppServerToolResult) => Promise<CodexAppServerHydratedToolResult>
   readonly reasoningEffort?: string
   readonly toolResults: readonly CodexAppServerToolResult[]
   readonly signal?: AbortSignal
@@ -51,28 +56,38 @@ export interface CodexSessionStep {
 
 type TurnPayload = Omit<CodexAppServerTurnRequest, 'reasoningEffort' | 'signal'>
 
-function appendedItem(
+function appendedItems(
   previous: readonly JsonValue[],
   current: readonly JsonValue[],
-): JsonValue | undefined {
-  if (current.length !== previous.length + 1) return undefined
+): JsonValue[] | undefined {
+  if (current.length <= previous.length) return undefined
   if (!previous.every((item, index) => isDeepStrictEqual(item, current[index]))) return undefined
-  return current.at(-1)
+  return current.slice(previous.length)
 }
 
-function userInput(item: JsonValue | undefined): JsonValue[] | undefined {
+function durableUserInput(item: JsonValue | undefined): JsonValue[] | undefined {
   if (item === undefined || item === null || typeof item !== 'object' || Array.isArray(item)) return undefined
-  if (item.type !== 'message' || item.role !== 'user' || 'id' in item || !Array.isArray(item.content)) return undefined
-  if (item.content.length !== 1) return undefined
-  const content = item.content[0]
-  if (content === null
-    || typeof content !== 'object'
-    || Array.isArray(content)
-    || content.type !== 'input_text'
-    || typeof content.text !== 'string') {
-    return undefined
+  if (item.type !== 'message' || item.role !== 'user' || 'id' in item || !Array.isArray(item.content)
+    || item.content.length === 0) return undefined
+  const supported = item.content.every((content) => {
+    if (content === null || typeof content !== 'object' || Array.isArray(content)) return false
+    if (content.type === 'input_text') return typeof content.text === 'string'
+    return content.type === 'input_image'
+      && content.image_url !== null
+      && typeof content.image_url === 'object'
+      && !Array.isArray(content.image_url)
+  })
+  return supported ? [...item.content] : undefined
+}
+
+function durableUserInputs(items: readonly JsonValue[]): JsonValue[][] | undefined {
+  const inputs: JsonValue[][] = []
+  for (const item of items) {
+    const input = durableUserInput(item)
+    if (input === undefined) return undefined
+    inputs.push(input)
   }
-  return [{ type: 'text', text: content.text, text_elements: [] }]
+  return inputs
 }
 
 function matchingToolResult(
@@ -81,10 +96,8 @@ function matchingToolResult(
   results: readonly CodexAppServerToolResult[],
 ): CodexAppServerToolResult | undefined {
   if (item === undefined || item === null || typeof item !== 'object' || Array.isArray(item)) return undefined
-  if (item.type !== 'function_call_output' || item.call_id !== callId || typeof item.output !== 'string') {
-    return undefined
-  }
-  return results.find(result => result.callId === callId && result.output === item.output)
+  if (item.type !== 'function_call_output' || item.call_id !== callId) return undefined
+  return results.find(result => result.callId === callId && isDeepStrictEqual(result.output, item.output))
 }
 
 function turnRequest(
@@ -103,6 +116,15 @@ async function coldTurn(request: CodexSessionRequest): Promise<CodexAppServerTur
     injectedItems: await request.loadInjectedHistory(),
     input: [],
   })
+}
+
+async function hydrateUserInputs(
+  request: CodexSessionRequest,
+  inputs: readonly (readonly JsonValue[])[],
+): Promise<JsonValue[][]> {
+  const hydrated: JsonValue[][] = []
+  for (const input of inputs) hydrated.push([...await request.loadUserInput(input)])
+  return hydrated
 }
 
 class SessionStep implements CodexSessionStep {
@@ -179,23 +201,32 @@ class SessionLease {
     }
     if (this.state.kind === 'disposed') return undefined
     const previous = this.state
-    const suffix = appendedItem(previous.history, request.history)
-    let turn: CodexAppServerTurnRequest | undefined
+    const suffix = appendedItems(previous.history, request.history)
+    if (suffix === undefined) return undefined
     if (previous.kind === 'idle') {
-      const input = userInput(suffix)
-      if (input !== undefined) {
-        turn = turnRequest(request, { input })
-      }
-    } else {
-      const toolResult = matchingToolResult(suffix, previous.callId, request.toolResults)
-      if (toolResult !== undefined) {
-        turn = turnRequest(request, { toolResult })
-      }
+      const contents = durableUserInputs(suffix)
+      if (contents === undefined) return undefined
+      this.clearIdleTimer()
+      this.state = { kind: 'active' }
+      const [input, ...steeringInputs] = await hydrateUserInputs(request, contents)
+      return this.step(await this.threadTask, turnRequest(request, {
+        input: input!,
+        ...(steeringInputs.length === 0 ? {} : { steeringInputs }),
+      }))
     }
-    if (turn === undefined) return undefined
+    const [resultItem, ...following] = suffix
+    const toolResult = matchingToolResult(resultItem, previous.callId, request.toolResults)
+    if (toolResult === undefined) return undefined
+    const contents = durableUserInputs(following)
+    if (contents === undefined) return undefined
     this.clearIdleTimer()
     this.state = { kind: 'active' }
-    return this.step(await this.threadTask, turn)
+    const hydrated = await request.loadToolResult(toolResult)
+    const steeringInputs = await hydrateUserInputs(request, contents)
+    return this.step(await this.threadTask, turnRequest(request, {
+      toolResult: hydrated,
+      ...(steeringInputs.length === 0 ? {} : { steeringInputs }),
+    }))
   }
 
   private step(
@@ -253,8 +284,13 @@ export class CodexSessionCache {
         throw new LlmError('Codex session already has an active model step', 'INVALID_CONTINUATION')
       }
       if (isDeepStrictEqual(lease.epoch, request.epoch)) {
-        const resumed = await lease.tryResume(request)
-        if (resumed !== undefined) return resumed
+        try {
+          const resumed = await lease.tryResume(request)
+          if (resumed !== undefined) return resumed
+        } catch (error: unknown) {
+          await this.retire(lease)
+          throw error
+        }
       }
       await this.retire(lease)
       lease = undefined

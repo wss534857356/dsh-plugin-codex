@@ -1,4 +1,4 @@
-/** Durable projection of Codex-native image outputs. */
+/** Durable projection and transient hydration of Codex image content. */
 
 import { createHash } from 'node:crypto'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
@@ -9,8 +9,13 @@ import type {
   SaveImageAttachment,
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
-import { LlmError } from '@deepseek-ai/dsh-llm'
-import type { CodexAppServerEvent, JsonValue } from './runner.ts'
+import { LlmError, OFFLOADED_IMAGE_TEXT } from '@deepseek-ai/dsh-llm'
+import type {
+  CodexAppServerEvent,
+  CodexAppServerHydratedToolResult,
+  CodexAppServerToolResult,
+  JsonValue,
+} from './runner.ts'
 
 const IMAGE_MARKER_KIND = 'dsh-image-attachment'
 const IMAGE_MARKER_VERSION = 1
@@ -20,6 +25,7 @@ const IMAGE_MEDIA_TYPES = new Set<ImageMediaType>([
   'image/webp',
   'image/gif',
 ])
+const IMAGE_DETAILS = new Set(['auto', 'low', 'high', 'original'])
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u
 
 interface JsonObject {
@@ -94,7 +100,8 @@ function referenceValue(ref: ImageAttachmentRef): JsonValue {
   }
 }
 
-function attachmentMarker(ref: ImageAttachmentRef): JsonValue {
+/** Durable adapter-private marker placed where App Server expects an image URL. */
+export function imageAttachmentMarker(ref: ImageAttachmentRef): JsonValue {
   return {
     kind: IMAGE_MARKER_KIND,
     version: IMAGE_MARKER_VERSION,
@@ -108,6 +115,14 @@ function markerReference(value: unknown, label: string): ImageAttachmentRef {
     throw new LlmError(`Codex history contains invalid ${label}`, 'INVALID_HISTORY')
   }
   return attachmentRef(marker.attachment, `${label}.attachment`)
+}
+
+function imageDetail(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !IMAGE_DETAILS.has(value)) {
+    throw new LlmError(`Codex history contains invalid ${label}`, 'INVALID_HISTORY')
+  }
+  return value
 }
 
 function displayName(value: unknown): string | undefined {
@@ -163,31 +178,130 @@ function imageKey(input: DecodedImage): string {
   return `${input.mediaType}:${createHash('sha256').update(input.data).digest('hex')}`
 }
 
+function base64Length(bytes: number, label: string): number {
+  const length = Math.ceil(bytes / 3) * 4
+  if (!Number.isSafeInteger(length)) {
+    throw new LlmError(`Codex history contains invalid ${label}`, 'INVALID_HISTORY')
+  }
+  return length
+}
+
+function markerLength(value: unknown, label: string): number {
+  return base64Length(markerReference(value, label).bytes, `${label}.attachment.bytes`)
+}
+
+function collectModelImageLengths(item: JsonValue, label: string, lengths: number[]): void {
+  if (item === null || typeof item !== 'object' || Array.isArray(item)) return
+  const values = item.type === 'message' && Array.isArray(item.content)
+    ? item.content
+    : item.type === 'function_call_output' && Array.isArray(item.output)
+      ? item.output
+      : undefined
+  if (values === undefined) return
+  for (const [index, value] of values.entries()) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)
+      || value.type !== 'input_image' || typeof value.image_url === 'string') continue
+    lengths.push(markerLength(value.image_url, `${label}[${index}].image_url`))
+  }
+}
+
+function replaceOldestModelImages(
+  item: JsonValue,
+  remaining: { count: number },
+): JsonValue {
+  if (item === null || typeof item !== 'object' || Array.isArray(item)) return item
+  const field = item.type === 'message' && Array.isArray(item.content)
+    ? 'content'
+    : item.type === 'function_call_output' && Array.isArray(item.output)
+      ? 'output'
+      : undefined
+  if (field === undefined) return item
+  const values = item[field] as JsonValue[]
+  let next: JsonValue[] | undefined
+  for (const [index, value] of values.entries()) {
+    const replace = remaining.count > 0
+      && value !== null
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && value.type === 'input_image'
+      && typeof value.image_url !== 'string'
+    if (replace) {
+      remaining.count -= 1
+      next ??= values.slice(0, index)
+      next.push({ type: 'input_text', text: OFFLOADED_IMAGE_TEXT })
+    } else {
+      next?.push(value)
+    }
+  }
+  return next === undefined ? item : { ...item, [field]: next }
+}
+
 /**
- * Move native image bytes out of provider events and restore them only for App Server injection.
- * One instance belongs to one model request.
+ * Bound only marker fields that will be hydrated into model-visible image input.
+ * Provider trajectory markers such as imageGeneration.result are never counted.
+ */
+export function boundRequestImageHistory(
+  history: readonly JsonValue[],
+  maxRequestImageBytes: number,
+): JsonValue[] {
+  if (!Number.isSafeInteger(maxRequestImageBytes) || maxRequestImageBytes <= 0) {
+    throw new LlmError('Codex maxRequestImageBytes must be a positive safe integer', 'INVALID_REQUEST')
+  }
+  const lengths: number[] = []
+  for (const [index, item] of history.entries()) {
+    collectModelImageLengths(item, `history[${index}]`, lengths)
+  }
+  let total = 0
+  for (const length of lengths) {
+    total += length
+    if (!Number.isSafeInteger(total)) {
+      throw new LlmError('Codex history image payload length overflowed', 'INVALID_HISTORY')
+    }
+  }
+  let count = 0
+  for (const length of lengths) {
+    if (total <= maxRequestImageBytes) break
+    total -= length
+    count += 1
+  }
+  if (count === 0) return [...history]
+  const remaining = { count }
+  return history.map(item => replaceOldestModelImages(item, remaining))
+}
+
+/**
+ * Move provider image bytes out of events and restore durable markers only at
+ * App Server transport boundaries. One instance belongs to one model request.
  */
 export class NativeImageBridge {
   private readonly references = new Map<string, ImageAttachmentRef>()
-  private readonly emitted = new Set<string>()
+  private readonly supplied = new Set<string>()
+  private readonly published = new Set<string>()
   private readonly hydrated = new Map<string, Promise<string>>()
+  private readonly harnessCallIds = new Set<string>()
   private storeValue: CodexImageStorePort | undefined
 
   constructor(private readonly resolveStore: () => CodexImageStorePort | undefined) {}
 
-  /** Mark images already present in durable history so provider echoes are not published again. */
+  /** Classify durable history images so supplied echoes and historical outputs stay distinct. */
   rememberHistory(history: readonly JsonValue[]): void {
+    for (const item of history) {
+      if (item !== null && typeof item === 'object' && !Array.isArray(item)
+        && item.type === 'function_call'
+        && item.namespace === 'deepseek_harness'
+        && typeof item.call_id === 'string') {
+        this.harnessCallIds.add(item.call_id)
+      }
+    }
     for (const [itemIndex, item] of history.entries()) {
-      if (item === null || typeof item !== 'object' || Array.isArray(item)
-        || item.type !== 'function_call_output' || !Array.isArray(item.output)) continue
-      for (const [contentIndex, value] of item.output.entries()) {
-        if (value === null || typeof value !== 'object' || Array.isArray(value)
-          || value.type !== 'input_image' || typeof value.image_url === 'string') continue
-        const ref = markerReference(
-          value.image_url,
-          `history[${itemIndex}].output[${contentIndex}].image_url`,
-        )
-        this.emitted.add(String(ref.attachmentId))
+      if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
+      if (item.type === 'message' && Array.isArray(item.content)) {
+        this.rememberContentMarkers(item.content, `history[${itemIndex}].content`, 'supplied')
+      } else if (item.type === 'function_call_output' && Array.isArray(item.output)) {
+        const origin = typeof item.call_id === 'string' && this.harnessCallIds.has(item.call_id)
+          ? 'supplied'
+          : 'published'
+        this.rememberContentMarkers(item.output, `history[${itemIndex}].output`, origin)
       }
     }
   }
@@ -196,21 +310,73 @@ export class NativeImageBridge {
   async externalize(event: CodexAppServerEvent): Promise<ExternalizedCodexEvent> {
     if (event.kind !== 'notification') return { event, images: [] }
     if (event.method === 'item/completed') return this.externalizeImageGeneration(event)
-    if (event.method === 'rawResponseItem/completed') return this.externalizeRawOutput(event)
+    if (event.method === 'rawResponseItem/completed') return this.externalizeRawItem(event)
     return { event, images: [] }
   }
 
-  /** Replace durable attachment markers with verified data URLs for App Server history injection. */
+  /** Replace durable markers with verified data URLs for cold thread injection. */
   async hydrateHistory(history: readonly JsonValue[], signal?: AbortSignal): Promise<JsonValue[]> {
     this.rememberHistory(history)
     return Promise.all(history.map((item, index) => this.hydrateItem(item, `history[${index}]`, signal)))
+  }
+
+  /** Translate one durable user-message content array to App Server v2 UserInput. */
+  async hydrateUserInput(content: readonly JsonValue[], signal?: AbortSignal): Promise<JsonValue[]> {
+    if (content.length === 0) {
+      throw new LlmError('Codex history contains an empty user input', 'INVALID_HISTORY')
+    }
+    return Promise.all(content.map(async (value, index): Promise<JsonValue> => {
+      const item = object(value, `userInput[${index}]`, 'INVALID_HISTORY')
+      if (item.type === 'input_text' && typeof item.text === 'string') {
+        return { type: 'text', text: item.text, text_elements: [] }
+      }
+      if (item.type === 'input_image' && typeof item.image_url !== 'string') {
+        const ref = markerReference(item.image_url, `userInput[${index}].image_url`)
+        this.supplied.add(String(ref.attachmentId))
+        const detail = imageDetail(item.detail, `userInput[${index}].detail`)
+        return {
+          type: 'image',
+          url: await this.dataUrl(ref, signal),
+          ...(detail === undefined ? {} : { detail }),
+        }
+      }
+      throw new LlmError(`Codex history contains unsupported userInput[${index}]`, 'INVALID_HISTORY')
+    }))
+  }
+
+  /** Translate one durable Harness tool result to App Server callback content items. */
+  async hydrateToolResult(
+    result: CodexAppServerToolResult,
+    signal?: AbortSignal,
+  ): Promise<CodexAppServerHydratedToolResult> {
+    const contentItems = typeof result.output === 'string'
+      ? [{ type: 'inputText', text: result.output } satisfies JsonValue]
+      : await this.hydrateToolOutput(result.output, signal)
+    return {
+      callId: result.callId,
+      contentItems: contentItems.length === 0 ? [{ type: 'inputText', text: '' }] : contentItems,
+      success: result.success,
+    }
+  }
+
+  private rememberContentMarkers(
+    values: readonly JsonValue[],
+    label: string,
+    origin: 'supplied' | 'published',
+  ): void {
+    for (const [index, value] of values.entries()) {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)
+        || value.type !== 'input_image' || typeof value.image_url === 'string') continue
+      const ref = markerReference(value.image_url, `${label}[${index}].image_url`)
+      ;(origin === 'supplied' ? this.supplied : this.published).add(String(ref.attachmentId))
+    }
   }
 
   private store(): CodexImageStorePort {
     this.storeValue ??= this.resolveStore()
     if (this.storeValue === undefined) {
       throw new LlmError(
-        'Codex native image output requires the durable attachment service',
+        'Codex image conversion requires the durable attachment service',
         'UNSUPPORTED_CONTENT',
       )
     }
@@ -233,8 +399,8 @@ export class NativeImageBridge {
 
   private publish(ref: ImageAttachmentRef): ImageAttachmentRef[] {
     const id = String(ref.attachmentId)
-    if (this.emitted.has(id)) return []
-    this.emitted.add(id)
+    if (this.published.has(id)) return []
+    this.published.add(id)
     return [ref]
   }
 
@@ -266,29 +432,43 @@ export class NativeImageBridge {
         ...event,
         params: {
           ...event.params,
-          item: { ...current, result: attachmentMarker(ref) },
+          item: { ...current, result: imageAttachmentMarker(ref) },
         },
       },
       images: this.publish(ref),
     }
   }
 
-  private async externalizeRawOutput(
+  private async externalizeRawItem(
     event: Extract<CodexAppServerEvent, { readonly kind: 'notification' }>,
   ): Promise<ExternalizedCodexEvent> {
     const current = object(event.params.item, 'Codex raw response item', 'MALFORMED_RESPONSE')
-    if (current.type !== 'function_call_output' || !Array.isArray(current.output)) {
-      return { event, images: [] }
+    if (current.type === 'function_call_output' && Array.isArray(current.output)) {
+      const supplied = typeof current.call_id === 'string' && this.harnessCallIds.has(current.call_id)
+      return this.externalizeRawContent(event, current, 'output', supplied)
     }
+    if (current.type === 'message' && current.role !== 'assistant' && Array.isArray(current.content)) {
+      return this.externalizeRawContent(event, current, 'content', true)
+    }
+    return { event, images: [] }
+  }
+
+  private async externalizeRawContent(
+    event: Extract<CodexAppServerEvent, { readonly kind: 'notification' }>,
+    current: JsonObject,
+    field: 'content' | 'output',
+    supplied: boolean,
+  ): Promise<ExternalizedCodexEvent> {
+    const values = current[field] as unknown[]
     const pending: PendingOutputImage[] = []
-    for (const [index, value] of current.output.entries()) {
-      const content = object(value, `Codex function output content ${index}`, 'MALFORMED_RESPONSE')
-      if (content.type !== 'input_image' || typeof content.image_url !== 'string') continue
-      if (!content.image_url.startsWith('data:')) continue
+    for (const [index, value] of values.entries()) {
+      const content = object(value, `Codex ${field} content ${index}`, 'MALFORMED_RESPONSE')
+      if (content.type !== 'input_image' || typeof content.image_url !== 'string'
+        || !content.image_url.startsWith('data:')) continue
       const input = decodedDataUrl(
         content.image_url,
         this.store().imageLimits,
-        `function output image ${index}`,
+        `${field} image ${index}`,
       )
       if (input !== undefined) pending.push({ index, input })
     }
@@ -297,25 +477,27 @@ export class NativeImageBridge {
     const totalBytes = pending.reduce((total, entry) => total + entry.input.data.byteLength, 0)
     if (pending.length > store.imageLimits.maxImagesPerMessage
       || totalBytes > store.imageLimits.maxMessageImageBytes) {
-      throw new LlmError('Codex App Server returned too many image bytes in one tool output', 'MALFORMED_RESPONSE')
+      throw new LlmError('Codex App Server returned too many image bytes in one content item', 'MALFORMED_RESPONSE')
     }
     await Promise.all(pending
       .filter(entry => !this.references.has(imageKey(entry.input)))
       .map(entry => store.validateImage(entry.input)))
-    const output = [...current.output]
+    const output = [...values] as JsonValue[]
     const images: ImageAttachmentRef[] = []
     for (const entry of pending) {
       const ref = await this.save(entry.input)
-      const content = object(output[entry.index], `Codex function output content ${entry.index}`, 'MALFORMED_RESPONSE')
-      output[entry.index] = { ...content, image_url: attachmentMarker(ref) }
-      images.push(...this.publish(ref))
+      const content = object(output[entry.index], `Codex ${field} content ${entry.index}`, 'MALFORMED_RESPONSE')
+      output[entry.index] = { ...content, image_url: imageAttachmentMarker(ref) }
+      const attachmentId = String(ref.attachmentId)
+      if (supplied || this.supplied.has(attachmentId)) this.supplied.add(attachmentId)
+      else images.push(...this.publish(ref))
     }
     return {
       event: {
         ...event,
         params: {
           ...event.params,
-          item: { ...current, output },
+          item: { ...current, [field]: output },
         },
       },
       images,
@@ -323,17 +505,53 @@ export class NativeImageBridge {
   }
 
   private async hydrateItem(item: JsonValue, label: string, signal?: AbortSignal): Promise<JsonValue> {
-    if (item === null || typeof item !== 'object' || Array.isArray(item)
-      || item.type !== 'function_call_output' || !Array.isArray(item.output)) return item
-    const output = await Promise.all(item.output.map(async (value, index): Promise<JsonValue> => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return item
+    if (item.type === 'message' && Array.isArray(item.content)) {
+      const supplied = item.role !== 'assistant'
+      const content = await this.hydrateRawContent(item.content, `${label}.content`, supplied, signal)
+      return content === item.content ? item : { ...item, content }
+    }
+    if (item.type === 'function_call_output' && Array.isArray(item.output)) {
+      const supplied = typeof item.call_id === 'string' && this.harnessCallIds.has(item.call_id)
+      const output = await this.hydrateRawContent(item.output, `${label}.output`, supplied, signal)
+      return output === item.output ? item : { ...item, output }
+    }
+    return item
+  }
+
+  private async hydrateRawContent(
+    values: readonly JsonValue[],
+    label: string,
+    supplied: boolean,
+    signal?: AbortSignal,
+  ): Promise<JsonValue[]> {
+    return Promise.all(values.map(async (value, index): Promise<JsonValue> => {
       if (value === null || typeof value !== 'object' || Array.isArray(value) || value.type !== 'input_image') {
         return value
       }
       if (typeof value.image_url === 'string') return value
-      const ref = markerReference(value.image_url, `${label}.output[${index}].image_url`)
+      const ref = markerReference(value.image_url, `${label}[${index}].image_url`)
+      ;(supplied ? this.supplied : this.published).add(String(ref.attachmentId))
       return { ...value, image_url: await this.dataUrl(ref, signal) }
     }))
-    return { ...item, output }
+  }
+
+  private async hydrateToolOutput(output: JsonValue, signal?: AbortSignal): Promise<JsonValue[]> {
+    if (!Array.isArray(output)) {
+      throw new LlmError('Codex history contains invalid structured tool output', 'INVALID_HISTORY')
+    }
+    return Promise.all(output.map(async (value, index): Promise<JsonValue> => {
+      const item = object(value, `toolResult.output[${index}]`, 'INVALID_HISTORY')
+      if (item.type === 'input_text' && typeof item.text === 'string') {
+        return { type: 'inputText', text: item.text }
+      }
+      if (item.type === 'input_image' && typeof item.image_url !== 'string') {
+        const ref = markerReference(item.image_url, `toolResult.output[${index}].image_url`)
+        this.supplied.add(String(ref.attachmentId))
+        return { type: 'inputImage', imageUrl: await this.dataUrl(ref, signal) }
+      }
+      throw new LlmError(`Codex history contains unsupported toolResult.output[${index}]`, 'INVALID_HISTORY')
+    }))
   }
 
   private dataUrl(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<string> {
@@ -341,9 +559,11 @@ export class NativeImageBridge {
     let task = this.hydrated.get(key)
     if (task === undefined) {
       task = this.store().readImage(ref, signal).then((stored) => {
+        if (JSON.stringify(referenceValue(stored.ref)) !== key) {
+          throw new LlmError('Codex attachment read returned a mismatched reference', 'INVALID_HISTORY')
+        }
         const input = { data: stored.data, mediaType: stored.ref.mediaType }
         this.references.set(imageKey(input), stored.ref)
-        this.emitted.add(String(stored.ref.attachmentId))
         return `data:${stored.ref.mediaType};base64,${Buffer.from(stored.data).toString('base64')}`
       })
       this.hydrated.set(key, task)

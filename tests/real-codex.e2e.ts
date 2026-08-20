@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, {
   BlockAssembler,
   createToolResultMessage,
@@ -24,6 +25,17 @@ const MODEL = 'gpt-5.6-sol'
 const ARGUMENT_SENTINEL = 'CODEX_HARNESS_TOOL_OK'
 const RESPONSE_SENTINEL = 'CODEX_HARNESS_ROUNDTRIP_OK'
 const CACHE_SENTINEL = 'CODEX_HARNESS_CACHE_OK'
+const IMAGE_SENTINEL = 'CODEX_HARNESS_IMAGE_OK'
+const IMAGE_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+const IMAGE_DATA = Buffer.from(IMAGE_BASE64, 'base64')
+const IMAGE_REF = {
+  attachmentId: AttachmentId('sha256:real-image-input'),
+  mediaType: 'image/png' as const,
+  bytes: IMAGE_DATA.byteLength,
+  width: 1,
+  height: 1,
+  name: 'pixel.png',
+}
 const SESSION_ID = SessionId('real-codex-cache-session')
 const SYSTEM = 'Follow the user request exactly. When echo_sentinel is explicitly requested, call it once and answer with its result only. Never call it otherwise.'
 
@@ -96,11 +108,25 @@ function responseText(message: Message): string {
 }
 
 describe('real locally authenticated Codex bridge', () => {
-  it('reuses one thread, reports a provider cache hit, and leaves no process tree behind', async () => {
+  it('reuses one thread, accepts durable image input, and leaves no process tree behind', async () => {
     const ctx = new Context()
     contexts.push(ctx)
     await ctx.plugin(LlmRuntime)
     await ctx.plugin(LocalSubprocessRuntime)
+    const readImage = vi.fn(async (ref: typeof IMAGE_REF) => ({ ref, data: IMAGE_DATA }))
+    ctx.provide('attachments', {
+      imageLimits: {
+        maxImageBytes: 5 * 1024 * 1024,
+        maxImagesPerMessage: 8,
+        maxMessageImageBytes: 20 * 1024 * 1024,
+        maxImagePixels: 20_000_000,
+        maxImageDimension: 2_000,
+        mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+      },
+      validateImage: vi.fn(async () => {}),
+      saveImage: vi.fn(async () => IMAGE_REF),
+      readImage,
+    } as never)
 
     const handles: SubprocessHandle[] = []
     const spawn = ctx.subprocess.spawn.bind(ctx.subprocess)
@@ -138,8 +164,10 @@ describe('real locally authenticated Codex bridge', () => {
     ]))
     expect(first.message.source).toMatchObject({
       kind: 'model',
-      replayState: { kind: 'codex-app-server', version: 4 },
+      replayState: { response: { kind: 'codex-app-server', version: 4 } },
     })
+    if (first.message.source.kind !== 'model') throw new Error('expected model replay state')
+    expect(JSON.stringify(first.message.source.replayState)).not.toContain('custom_tool_call')
     const call = toolCall(first.message)
     expect(call.name).toBe(tool.name)
     expect(JSON.parse(call.arguments)).toEqual({ value: ARGUMENT_SENTINEL })
@@ -149,7 +177,14 @@ describe('real locally authenticated Codex bridge', () => {
       content: [{ type: 'text', text: RESPONSE_SENTINEL }],
       isError: false,
     })
-    const second = await assemble(ctx, [user, first.message, result])
+    const queued = createUserMessage({
+      source: { kind: 'plugin', plugin: 'queued-inbox' },
+      content: [{
+        type: 'text',
+        text: `The completed tool result is authoritative. Reply with exactly ${RESPONSE_SENTINEL}.`,
+      }],
+    })
+    const second = await assemble(ctx, [user, first.message, result, queued])
     expect(second.finish).toEqual({ kind: 'stop' })
     expect(responseText(second.message).trim()).toBe(RESPONSE_SENTINEL)
 
@@ -157,7 +192,7 @@ describe('real locally authenticated Codex bridge', () => {
       source: { kind: 'user' },
       content: [{ type: 'text', text: `Reply with exactly ${CACHE_SENTINEL}. Do not use a tool.` }],
     })
-    const third = await assemble(ctx, [user, first.message, result, second.message, followUp])
+    const third = await assemble(ctx, [user, first.message, result, queued, second.message, followUp])
     expect(third.finish).toEqual({ kind: 'stop' })
     expect(responseText(third.message).trim()).toBe(CACHE_SENTINEL)
     const cacheEvidence = {
@@ -169,7 +204,29 @@ describe('real locally authenticated Codex bridge', () => {
         ? [{ type: block.actionType, event: block.protocolEvent }]
         : []),
     }
-    expect(third.usage?.cacheReadTokens ?? 0, JSON.stringify(cacheEvidence, null, 2)).toBeGreaterThan(0)
+    expect(cacheEvidence.handles, JSON.stringify(cacheEvidence, null, 2)).toBe(1)
+
+    const imageFollowUp = createUserMessage({
+      source: { kind: 'user' },
+      content: [
+        { type: 'text', text: `Reply with exactly ${IMAGE_SENTINEL}. Do not use a tool or describe the image.` },
+        { type: 'image', attachment: IMAGE_REF },
+      ],
+    })
+    const fourth = await assemble(ctx, [
+      user,
+      first.message,
+      result,
+      queued,
+      second.message,
+      followUp,
+      third.message,
+      imageFollowUp,
+    ])
+    expect(fourth.finish).toEqual({ kind: 'stop' })
+    expect(responseText(fourth.message).trim()).toBe(IMAGE_SENTINEL)
+    expect(readImage).toHaveBeenCalledOnce()
+    expect(JSON.stringify(fourth.message)).not.toContain(IMAGE_BASE64)
 
     expect(handles).toHaveLength(1)
     await ctx.fiber.dispose()

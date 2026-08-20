@@ -1,6 +1,7 @@
 /** Harness LLM adapter backed by one ephemeral Codex App Server per request. */
 
 import {
+  contentHasImage,
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
@@ -10,11 +11,12 @@ import type {
   LlmModelInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
+  ModelModality,
   ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { HARNESS_TOOL_NAMESPACE } from './identifiers.ts'
-import { NativeImageBridge } from './images.ts'
+import { boundRequestImageHistory, NativeImageBridge } from './images.ts'
 import type { CodexImageStorePort } from './images.ts'
 import {
   AppServerEventMapper,
@@ -40,6 +42,7 @@ export interface CodexModel {
   readonly name: string
   readonly description?: string
   readonly contextWindow?: number
+  readonly inputModalities: readonly ModelModality[]
   readonly reasoningEfforts: readonly string[]
   readonly defaultReasoningEffort?: string
 }
@@ -51,6 +54,7 @@ export interface CodexAdapterOptions {
   readonly modelProvider: string
   readonly models: readonly CodexModel[]
   readonly maxRetries: number
+  readonly maxRequestImageBytes: number
   readonly maxCachedSessions: number
   readonly sessionIdleTimeoutMs: number
   readonly onCleanupError: (error: unknown) => void
@@ -66,7 +70,7 @@ function modelInfo(provider: string, model: CodexModel): LlmModelInfo {
     id: model.id,
     name: model.name,
     ...(model.description === undefined ? {} : { description: model.description }),
-    inputModalities: ['text'],
+    inputModalities: [...model.inputModalities],
   }
 }
 
@@ -112,6 +116,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
     const fallback: CodexModel = {
       id: model,
       name: model,
+      inputModalities: ['text'],
       reasoningEfforts: [],
     }
     const resolved = configured ?? fallback
@@ -143,7 +148,18 @@ export class CodexAppServerAdapter extends LlmAdapter {
         'UNSUPPORTED_OPTION',
       )
     }
-    const history = appServerHistory(options)
+    const hasImages = options.messages.some(message => contentHasImage(message.content))
+    const configuredModel = this.options.models.find(model => model.id === options.model)
+    if (hasImages && configuredModel?.inputModalities.includes('image') !== true) {
+      throw new LlmError(
+        `Codex model "${options.model}" does not accept image input`,
+        'UNSUPPORTED_CONTENT',
+      )
+    }
+    const history = boundRequestImageHistory(
+      appServerHistory(options),
+      this.options.maxRequestImageBytes,
+    )
     const images = new NativeImageBridge(this.options.resolveAttachments)
     images.rememberHistory(history)
     const dynamicTools = appServerDynamicTools(options.tools, options.messages)
@@ -176,8 +192,10 @@ export class CodexAppServerAdapter extends LlmAdapter {
         },
         history,
         loadInjectedHistory: () => images.hydrateHistory(history, options.signal),
+        loadUserInput: content => images.hydrateUserInput(content, options.signal),
+        loadToolResult: result => images.hydrateToolResult(result, options.signal),
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-        toolResults: appServerToolResults(options),
+        toolResults: appServerToolResults(options, history),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       })
       events = cached.events
@@ -203,7 +221,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
           yield {
             type: 'finish',
             reason: { kind: 'tool-calls' },
-            replayState,
+            replayState: { response: replayState },
           }
           return
         }
@@ -217,7 +235,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
           yield {
             type: 'finish',
             reason: { kind: 'stop' },
-            replayState,
+            replayState: { response: replayState },
           }
           return
         }
@@ -248,7 +266,8 @@ export class CodexAppServerAdapter extends LlmAdapter {
       reasoningEffort: options.reasoningEffort === undefined ? null : String(options.reasoningEffort),
       system: options.system ?? '',
       dynamicTools: [...dynamicTools],
-      threadPolicy: 'harness-read-only-no-native-compaction-v2',
+      maxRequestImageBytes: this.options.maxRequestImageBytes,
+      threadPolicy: 'harness-read-only-no-native-compaction-image-input-v1',
     }
   }
 

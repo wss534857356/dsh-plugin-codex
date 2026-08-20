@@ -1,8 +1,6 @@
-import { memo, useMemo, useState } from 'react'
+import { Fragment, memo, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AssistantBlock } from '@deepseek-ai/dsh-client-runtime/client'
-import { ImageGallery } from '@deepseek-ai/dsh-client-ui-attachment'
-import type { ImageLoader, MessageImageLabels } from '@deepseek-ai/dsh-client-ui-attachment'
 import {
   DisclosureRow,
   IconApiOutline14,
@@ -16,7 +14,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { RenderMessageImages, TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { CodexActionBlock } from '../protocol.ts'
 import { NS } from './locales.ts'
@@ -259,25 +257,11 @@ function ReasoningBlock({ text, running, t }: { text: string; running: boolean; 
   )
 }
 
-function imageLabels(t: CodexTranslate): MessageImageLabels {
-  return {
-    image: t('image.label'),
-    open: t('image.openOriginal'),
-    openNamed: label => t('image.openOriginalLabel', { label }),
-    loading: t('image.loading'),
-    loadFailed: t('image.loadFailed'),
-    lightbox: {
-      dialog: t('image.preview'),
-      close: t('image.closePreview'),
-    },
-  }
-}
-
 export interface CodexAssistantBodyProps {
   readonly blocks: readonly AssistantBlock[]
   readonly streaming: boolean
   readonly interrupted?: boolean | undefined
-  readonly loadImage?: ImageLoader | undefined
+  readonly renderMessageImages: RenderMessageImages
   readonly mentions?: MarkdownFileMentions | undefined
   readonly t: CodexTranslate
 }
@@ -287,13 +271,11 @@ export const CodexAssistantBody = memo(function CodexAssistantBody({
   blocks,
   streaming,
   interrupted,
-  loadImage,
+  renderMessageImages,
   mentions,
   t,
 }: CodexAssistantBodyProps) {
   const codeLabels = useMemo(() => ({ copyLabel: t('copy'), copiedLabel: t('copied') }), [t])
-  const labels = useMemo(() => imageLabels(t), [t])
-  const loader = loadImage ?? (() => Promise.reject(new Error(t('image.loadFailed'))))
   const last = blocks.length - 1
   const hasVisible = streaming
     || interrupted === true
@@ -338,7 +320,14 @@ export const CodexAssistantBody = memo(function CodexAssistantBody({
           group.push(next)
           index += 1
         }
-        rendered.push(<ImageGallery key={start} images={group} load={loader} align="start" labels={labels} />)
+        rendered.push(
+          <Fragment key={start}>
+            {renderMessageImages({
+              images: group.map(({ attachment }) => ({ attachment })),
+              align: 'start',
+            })}
+          </Fragment>,
+        )
         break
       }
       case 'tool-call':
@@ -385,7 +374,7 @@ export const CodexAssistantNodeView = memo(function CodexAssistantNodeView({
   node,
   useTurnData,
   openFile,
-  loadImage,
+  renderMessageImages,
   fileMentions,
   t,
 }: CodexAssistantNodeViewProps) {
@@ -408,7 +397,7 @@ export const CodexAssistantNodeView = memo(function CodexAssistantNodeView({
       blocks={data.blocks}
       streaming={data.status === 'running'}
       interrupted={data.status === 'interrupted'}
-      loadImage={loadImage}
+      renderMessageImages={renderMessageImages}
       mentions={mentions}
       t={t}
     />

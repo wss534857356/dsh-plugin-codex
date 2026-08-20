@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Context } from '@deepseek-ai/cordis'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { AssistantBlock } from '@deepseek-ai/dsh-client-runtime/client'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { describe, expect, it, vi } from 'vitest'
@@ -40,6 +41,8 @@ function lifecycleBlock(): CodexActionBlock {
 }
 
 describe('Codex Assistant renderer', () => {
+  const renderMessageImages = vi.fn(() => null)
+
   it('recognizes only complete provider trajectory records', () => {
     expect(isCodexActionBlock(lifecycleBlock())).toBe(true)
     expect(isCodexActionBlock({ ...lifecycleBlock(), phase: 'mystery' })).toBe(false)
@@ -119,6 +122,7 @@ describe('Codex Assistant renderer', () => {
           { kind: 'other', block: completed },
         ]}
         streaming
+        renderMessageImages={renderMessageImages}
         t={t}
       />,
     )
@@ -129,7 +133,12 @@ describe('Codex Assistant renderer', () => {
   it('specializes codex-action while preserving the generic fallback', () => {
     const actionOnly: readonly AssistantBlock[] = [{ kind: 'other', block: lifecycleBlock() }]
     const actionHtml = renderToStaticMarkup(
-      <CodexAssistantBody blocks={actionOnly} streaming={false} t={t} />,
+      <CodexAssistantBody
+        blocks={actionOnly}
+        streaming={false}
+        renderMessageImages={renderMessageImages}
+        t={t}
+      />,
     )
     expect(actionHtml).toContain('data-codex-assistant-renderer="true"')
     expect(actionHtml).toContain('Codex 生命周期')
@@ -137,9 +146,54 @@ describe('Codex Assistant renderer', () => {
 
     const generic: readonly AssistantBlock[] = [{ kind: 'other', block: { type: 'future-block' } }]
     const genericHtml = renderToStaticMarkup(
-      <CodexAssistantBody blocks={generic} streaming={false} t={t} />,
+      <CodexAssistantBody
+        blocks={generic}
+        streaming={false}
+        renderMessageImages={renderMessageImages}
+        t={t}
+      />,
     )
     expect(genericHtml).toContain('未知内容块')
+  })
+
+  it('routes consecutive images through the attachment presentation slot', () => {
+    const first = {
+      attachmentId: AttachmentId('sha256:first'),
+      mediaType: 'image/png' as const,
+      bytes: 1,
+      width: 1,
+      height: 1,
+      name: 'first.png',
+    }
+    const second = {
+      attachmentId: AttachmentId('sha256:second'),
+      mediaType: 'image/jpeg' as const,
+      bytes: 2,
+      width: 2,
+      height: 1,
+      name: 'second.jpg',
+    }
+    const renderImages = vi.fn(() => <span data-image-slot />)
+    const blocks: readonly AssistantBlock[] = [
+      { kind: 'image', attachment: first },
+      { kind: 'image', attachment: second },
+    ]
+
+    const html = renderToStaticMarkup(
+      <CodexAssistantBody
+        blocks={blocks}
+        streaming={false}
+        renderMessageImages={renderImages}
+        t={t}
+      />,
+    )
+
+    expect(renderImages).toHaveBeenCalledOnce()
+    expect(renderImages).toHaveBeenCalledWith({
+      images: [{ attachment: first }, { attachment: second }],
+      align: 'start',
+    })
+    expect(html).toContain('data-image-slot')
   })
 
   it('renders earlier records without inventing a missing protocol event', () => {
@@ -154,7 +208,12 @@ describe('Codex Assistant renderer', () => {
     const action = codexActionView(legacy)
     const blocks: readonly AssistantBlock[] = [{ kind: 'other', block: legacy }]
     const html = renderToStaticMarkup(
-      <CodexAssistantBody blocks={blocks} streaming={false} t={t} />,
+      <CodexAssistantBody
+        blocks={blocks}
+        streaming={false}
+        renderMessageImages={renderMessageImages}
+        t={t}
+      />,
     )
     expect(html).toContain('data-codex-action="thread/start"')
     expect(html).not.toContain('未知内容块')
