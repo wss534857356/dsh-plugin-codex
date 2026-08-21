@@ -49,7 +49,13 @@ dsh --profile web
 
 Harness profile 设置了 `autoInstallPeers: false`，因此安装时可能报告缺少 peer dependency。启动时，profile 的模块回退机制会从当前 Harness 安装中提供这些 peer，使插件共享相同的 Cordis 和服务实例。
 
-若要从源码安装，请使用 `dsh plugin --profile web add github:<owner>/<repo>#<commit>`。通过 Git 安装时，包的 `prepare` 脚本会构建 TypeScript，因此 pnpm 必须允许该包执行构建。已打包的 tarball 或 npm release 已经完成构建。
+若要从源码安装：
+
+```sh
+dsh plugin --profile web add github:wss534857356/dsh-plugin-codex
+```
+
+可追加 `#<commit>` 固定版本。通过 Git 安装时，包的 `prepare` 脚本会构建 TypeScript，因此 pnpm 必须允许该包执行构建。已打包的 tarball 或 npm release 已经完成构建。
 
 从 profile 中移除该组合包：
 

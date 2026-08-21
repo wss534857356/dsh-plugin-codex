@@ -55,7 +55,13 @@ The bundle registers provider `codex-local` and every model shown by the pinned 
 
 Harness profiles set `autoInstallPeers: false`, so installation may report missing peer dependencies. At boot, the profile module fallback supplies those peers from the current Harness installation so the plugin shares its Cordis and service instances.
 
-For source installation, use `dsh plugin --profile web add github:<owner>/<repo>#<commit>`. The package's `prepare` script builds TypeScript during a Git install, so pnpm must allow that package build. A packed tarball or npm release is already built.
+For source installation:
+
+```sh
+dsh plugin --profile web add github:wss534857356/dsh-plugin-codex
+```
+
+Append `#<commit>` to pin a revision. The package's `prepare` script builds TypeScript during a Git install, so pnpm must allow that package build. A packed tarball or npm release is already built.
 
 Remove the bundle from the profile with:
 
