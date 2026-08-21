@@ -6,7 +6,11 @@
 
 它与 Harness 内置的 `@deepseek-ai/dsh-subagent-codex` 不同。内置包将 Codex 暴露为接受委派的子 agent；本包注册到 `ctx.llm`，因此 Harness Agent loop 可以选择 `codex-local` 作为模型提供方。
 
-## 设置卡片
+## 截图
+
+![会话界面](docs/images/conversation-screenshot.png)
+
+![模型选择器](docs/images/model-selector-screenshot.png)
 
 ![Codex App Server 设置卡片](docs/images/codex-settings-card.png)
 
