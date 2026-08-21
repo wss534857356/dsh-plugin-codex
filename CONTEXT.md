@@ -55,3 +55,11 @@ _Avoid_: Prompt ownership, raw transport
 **Instruction source report**:
 The App Server list of discovered user or project instruction files. An empty report does not account for Codex-generated permission, environment, collaboration, or tool instructions.
 _Avoid_: Complete prompt inventory
+
+**Provider-following auxiliary call**:
+An auxiliary operation that inherits the initiating Agent's selected provider and model instead of using a deployment-wide fallback route.
+_Avoid_: Main model turn, static auxiliary provider
+
+**Conditional tool takeover**:
+An around-dispatch decision that handles a Harness tool only for a matching initiating provider and otherwise delegates to the tool's existing execution chain unchanged.
+_Avoid_: Tool replacement, profile-wide provider switch

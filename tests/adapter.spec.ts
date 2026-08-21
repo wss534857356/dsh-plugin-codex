@@ -109,6 +109,7 @@ function instance(
   runner: CodexAppServerRunnerPort,
   resolveAttachments: () => CodexImageStorePort | undefined = () => undefined,
   maxRequestImageBytes = 20 * 1024 * 1024,
+  resolveImageGenerationEnabled: () => boolean = () => true,
 ): CodexAppServerAdapter {
   return new CodexAppServerAdapter({
     provider: 'codex-local',
@@ -128,6 +129,7 @@ function instance(
     sessionIdleTimeoutMs: 600_000,
     onCleanupError: vi.fn(),
     resolveAttachments,
+    resolveImageGenerationEnabled,
     runner,
   })
 }
@@ -136,6 +138,7 @@ function adapter(
   events: readonly CodexAppServerEvent[],
   resolveAttachments: () => CodexImageStorePort | undefined = () => undefined,
   maxRequestImageBytes = 20 * 1024 * 1024,
+  resolveImageGenerationEnabled: () => boolean = () => true,
 ) {
   const stream = vi.fn((input: CodexAppServerRequest): AsyncIterable<CodexAppServerEvent> => {
     return (async function * () {
@@ -149,13 +152,14 @@ function adapter(
   }
   return {
     stream,
-    adapter: instance(runner, resolveAttachments, maxRequestImageBytes),
+    adapter: instance(runner, resolveAttachments, maxRequestImageBytes, resolveImageGenerationEnabled),
   }
 }
 
 function cachedAdapter(
   turns: readonly (readonly CodexAppServerEvent[])[],
   resolveAttachments: () => CodexImageStorePort | undefined = () => undefined,
+  resolveImageGenerationEnabled: () => boolean = () => true,
 ) {
   const requests: CodexAppServerTurnRequest[] = []
   const thread: CodexAppServerThreadPort = {
@@ -172,7 +176,12 @@ function cachedAdapter(
   const open = vi.fn(async (_input: CodexAppServerThreadRequest) => thread)
   const oneShot = vi.fn((_input: CodexAppServerRequest) => (async function * () {})())
   return {
-    adapter: instance({ open, stream: oneShot }, resolveAttachments),
+    adapter: instance(
+      { open, stream: oneShot },
+      resolveAttachments,
+      20 * 1024 * 1024,
+      resolveImageGenerationEnabled,
+    ),
     open,
     oneShot,
     requests,
@@ -582,6 +591,51 @@ describe('CodexAppServerAdapter', () => {
       input: [{ type: 'text', text: 'follow up', text_elements: [] }],
     })
     expect(secondChunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    await cached.adapter.dispose()
+  })
+
+  it('rebuilds a cached session when the image-generation setting changes', async () => {
+    let imageGenerationEnabled = true
+    const cached = cachedAdapter([
+      answerEvents('1', 'first answer'),
+      answerEvents('2', 'second answer'),
+    ], () => undefined, () => imageGenerationEnabled)
+    const firstRequest = request({ sessionId: SessionId('session-setting') })
+    const firstChunks = await collect(cached.adapter, firstRequest)
+    const firstAnswer: Message = {
+      id: MessageId('assistant-setting-1'),
+      role: 'assistant',
+      source: {
+        kind: 'model',
+        provider: 'codex-local',
+        model: 'gpt-5.6-sol',
+        replayState: replayState(firstChunks),
+      },
+      content: [{ type: 'text', text: 'first answer' }],
+    }
+    imageGenerationEnabled = false
+
+    await collect(cached.adapter, request({
+      sessionId: SessionId('session-setting'),
+      messages: [
+        ...firstRequest.messages,
+        firstAnswer,
+        {
+          id: MessageId('user-setting-2'),
+          role: 'user',
+          source: { kind: 'user' },
+          content: [{ type: 'text', text: 'follow up' }],
+        },
+      ],
+    }))
+
+    expect(cached.open).toHaveBeenCalledTimes(2)
+    expect(cached.open.mock.calls[0]?.[0]).toMatchObject({ imageGenerationEnabled: true })
+    expect(cached.open.mock.calls[1]?.[0]).toMatchObject({ imageGenerationEnabled: false })
+    expect(cached.requests[1]).toMatchObject({
+      injectedItems: expect.arrayContaining([expect.objectContaining({ role: 'user' })]),
+      input: [],
+    })
     await cached.adapter.dispose()
   })
 
@@ -1070,6 +1124,42 @@ describe('CodexAppServerAdapter', () => {
     const { adapter: instance, stream } = adapter([])
     await expect(collect(instance, request(override))).rejects.toMatchObject({ code: 'UNSUPPORTED_OPTION' })
     expect(stream).not.toHaveBeenCalled()
+  })
+
+  it('uses Codex for compaction while treating its maxTokens cap as advisory', async () => {
+    const setup = adapter(answerEvents('compact', '## Primary Request and Intent\n- Continue the task.'))
+    const chunks = await collect(setup.adapter, request({
+      purpose: 'compaction',
+      maxTokens: 8192,
+      tools: [{
+        name: 'read',
+        description: 'Read a file.',
+        parameters: { type: 'object', properties: {} },
+      }],
+    }))
+
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    expect(setup.stream).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'gpt-5.6-sol',
+      dynamicTools: [],
+      imageGenerationEnabled: false,
+    }))
+  })
+
+  it('captures the live image-generation setting for an ordinary turn', async () => {
+    let enabled = false
+    const setup = adapter(answerEvents('setting', 'done'), () => undefined, 20 * 1024 * 1024, () => enabled)
+
+    await collect(setup.adapter, request())
+    expect(setup.stream).toHaveBeenLastCalledWith(expect.objectContaining({
+      imageGenerationEnabled: false,
+    }))
+
+    enabled = true
+    await collect(setup.adapter, request())
+    expect(setup.stream).toHaveBeenLastCalledWith(expect.objectContaining({
+      imageGenerationEnabled: true,
+    }))
   })
 
   it('maps an actual failed Codex turn', async () => {

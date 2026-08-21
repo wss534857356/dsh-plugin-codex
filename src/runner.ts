@@ -30,8 +30,7 @@ const WORKDIR_PREFIX = 'dsh-codex-app-server-'
 const HARNESS_COMPACTION_THRESHOLD = Number.MAX_SAFE_INTEGER
 const TIMEOUT_REASON = Symbol('codex-app-server-timeout')
 const CONSUMER_REASON = Symbol('codex-app-server-consumer-stop')
-const CODEX_ENABLED_FEATURES = [
-  'image_generation',
+const CODEX_ALWAYS_ENABLED_FEATURES = [
   'view_image',
 ] as const
 const CODEX_DISABLED_FEATURES = [
@@ -63,6 +62,10 @@ export interface CodexAppServerRequest {
   readonly system: string
   readonly history: readonly JsonValue[]
   readonly dynamicTools: readonly JsonValue[]
+  /** Native Codex web-search policy for this process. */
+  readonly webSearch?: CodexWebSearchMode
+  /** Whether the pinned native image-generation feature is offered to this turn. */
+  readonly imageGenerationEnabled?: boolean
   readonly signal?: AbortSignal
 }
 
@@ -72,8 +75,15 @@ export interface CodexAppServerThreadRequest {
   readonly modelProvider: string
   readonly system: string
   readonly dynamicTools: readonly JsonValue[]
+  /** Native Codex web-search policy for this process. */
+  readonly webSearch?: CodexWebSearchMode
+  /** Whether the pinned native image-generation feature is offered to this thread. */
+  readonly imageGenerationEnabled?: boolean
   readonly signal?: AbortSignal
 }
+
+/** Top-level Codex web-search policy passed to the pinned App Server. */
+export type CodexWebSearchMode = 'disabled' | 'live'
 
 /** Durable Harness result used to match one pending App Server callback exactly. */
 export interface CodexAppServerToolResult {
@@ -130,9 +140,21 @@ export function codexCliEntry(): string {
 }
 
 /** Build the fixed, non-shell App Server argv. */
-export function codexAppServerArgv(): string[] {
-  const enabled = CODEX_ENABLED_FEATURES.flatMap(feature => ['--enable', feature])
-  const disabled = CODEX_DISABLED_FEATURES.flatMap(feature => ['--disable', feature])
+export function codexAppServerArgv(
+  webSearch: CodexWebSearchMode = 'disabled',
+  imageGenerationEnabled = true,
+): string[] {
+  const enabledFeatures = [
+    ...CODEX_ALWAYS_ENABLED_FEATURES,
+    ...(imageGenerationEnabled ? ['image_generation'] : []),
+  ]
+  const disabledFeatures = [
+    ...CODEX_DISABLED_FEATURES.filter(feature => webSearch === 'disabled' || feature !== 'standalone_web_search'),
+    ...(imageGenerationEnabled ? [] : ['image_generation']),
+  ]
+  const enabled = enabledFeatures.flatMap(feature => ['--enable', feature])
+  const disabled = disabledFeatures
+    .flatMap(feature => ['--disable', feature])
   return [
     process.execPath,
     codexCliEntry(),
@@ -144,7 +166,7 @@ export function codexAppServerArgv(): string[] {
     '-c',
     'analytics.enabled=false',
     '-c',
-    'web_search="disabled"',
+    `web_search="${webSearch}"`,
     '-c',
     `model_auto_compact_token_limit=${String(HARNESS_COMPACTION_THRESHOLD)}`,
     ...enabled,
@@ -296,7 +318,7 @@ export class CodexAppServerRunner implements CodexAppServerRunnerPort {
     try {
       if (request.signal?.aborted) throw request.signal.reason
       child = this.options.spawn({
-        argv: codexAppServerArgv(),
+        argv: codexAppServerArgv(request.webSearch, request.imageGenerationEnabled),
         cwd: workdir,
         stdio: {
           stdin: 'pipe',
@@ -331,7 +353,7 @@ export class CodexAppServerRunner implements CodexAppServerRunnerPort {
         clientInfo: {
           name: 'deepseek-harness',
           title: 'DeepSeek Harness',
-          version: '0.1.17',
+          version: '0.1.19',
         },
         capabilities: {
           experimentalApi: true,

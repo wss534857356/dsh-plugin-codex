@@ -167,6 +167,24 @@ describe('Codex App Server runner', () => {
     expect(disabledFeatures).not.toContain('image_generation')
     expect(disabledFeatures).not.toContain('view_image')
     expect(argv).not.toContain('--dangerously-bypass-approvals-and-sandbox')
+
+    const searchArgv = codexAppServerArgv('live')
+    expect(searchArgv).toContain('web_search="live"')
+    const searchDisabledFeatures = searchArgv.flatMap(
+      (argument, index) => argument === '--disable' ? [searchArgv[index + 1]] : [],
+    )
+    expect(searchDisabledFeatures).not.toContain('standalone_web_search')
+
+    const noImageArgv = codexAppServerArgv('disabled', false)
+    const noImageEnabledFeatures = noImageArgv.flatMap(
+      (argument, index) => argument === '--enable' ? [noImageArgv[index + 1]] : [],
+    )
+    const noImageDisabledFeatures = noImageArgv.flatMap(
+      (argument, index) => argument === '--disable' ? [noImageArgv[index + 1]] : [],
+    )
+    expect(noImageEnabledFeatures).not.toContain('image_generation')
+    expect(noImageEnabledFeatures).toContain('view_image')
+    expect(noImageDisabledFeatures).toContain('image_generation')
   })
 
   it('starts an ephemeral thread, injects history, streams events, and reaches quiescence', async () => {
@@ -195,7 +213,7 @@ describe('Codex App Server runner', () => {
       expect.objectContaining({ kind: 'notification', method: 'turn/completed' }),
     ]))
     expect(messages.find(message => message.method === 'initialize')).toMatchObject({
-      params: { clientInfo: { name: 'deepseek-harness', version: '0.1.17' } },
+      params: { clientInfo: { name: 'deepseek-harness', version: '0.1.19' } },
     })
     expect(messages.find(message => message.method === 'thread/start')).toMatchObject({
       params: {
@@ -224,6 +242,37 @@ describe('Codex App Server runner', () => {
     expect(existsSync(setup.spec().cwd)).toBe(false)
     expect(setup.child.terminate).toHaveBeenCalledOnce()
     expect(setup.child.waitForExit).toHaveBeenCalledOnce()
+  })
+
+  it('starts a live-search process only for an explicit search request', async () => {
+    const setup = runner(standardScript((write) => {
+      write({ method: 'turn/completed', params: {
+        threadId: 'thread-1',
+        turn: { id: 'turn-1', status: 'completed', error: null },
+      } })
+    }))
+
+    await collect(setup.runner, request({ webSearch: 'live' }))
+
+    expect(setup.spec().argv).toContain('web_search="live"')
+    expect(setup.spec().argv).not.toEqual(expect.arrayContaining(['--disable', 'standalone_web_search']))
+  })
+
+  it('applies the image-generation policy to each new process', async () => {
+    const setup = runner(standardScript((write) => {
+      write({ method: 'turn/completed', params: {
+        threadId: 'thread-1',
+        turn: { id: 'turn-1', status: 'completed', error: null },
+      } })
+    }))
+
+    await collect(setup.runner, request({ imageGenerationEnabled: false }))
+
+    expect(setup.spec().argv).toEqual(expect.arrayContaining(['--disable', 'image_generation']))
+    const enabledFeatures = setup.spec().argv.flatMap(
+      (argument, index) => argument === '--enable' ? [setup.spec().argv[index + 1]] : [],
+    )
+    expect(enabledFeatures).not.toContain('image_generation')
   })
 
   it('hands a dynamic tool request back without sending a provider-side result', async () => {

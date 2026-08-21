@@ -1,10 +1,30 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import ToolRuntime from '@deepseek-ai/dsh-tools'
+import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as CodexAppServer from '../src/index.ts'
 
 const contexts: Context[] = []
+
+class MemorySettings extends SettingsProvider {
+  private readonly doc: Record<string, unknown> = {}
+
+  override get writable(): boolean {
+    return true
+  }
+
+  protected override load(): Promise<Record<string, unknown>> {
+    return Promise.resolve(structuredClone(this.doc))
+  }
+
+  protected override persist(ns: SettingsNamespace, section: Record<string, unknown>): Promise<void> {
+    this.doc[ns] = structuredClone(section)
+    return Promise.resolve()
+  }
+}
 
 afterEach(async () => {
   await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
@@ -15,6 +35,8 @@ async function context(): Promise<Context> {
   contexts.push(ctx)
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(LocalSubprocessRuntime)
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
   return ctx
 }
 
@@ -88,5 +110,83 @@ describe('plugin composition', () => {
   it('rejects an explicitly empty model catalog', async () => {
     const ctx = await context()
     await expect(ctx.plugin(CodexAppServer, { models: [] })).rejects.toThrow('models must not be empty')
+  })
+
+  it('rejects a non-positive Codex web-search result cap', async () => {
+    const ctx = await context()
+    await expect(ctx.plugin(CodexAppServer, { webSearchMaxResults: 0 }))
+      .rejects.toThrow(/webSearchMaxResults.*>= 1/u)
+  })
+
+  it('delegates web_search unchanged for a non-Codex initiating Agent', async () => {
+    const ctx = await context()
+    await ctx.plugin(CodexAppServer, {})
+    const downstream = {
+      isError: false as const,
+      value: null,
+      content: [],
+    }
+    const next = vi.fn(async () => downstream)
+    const result = await ctx.waterfall(
+      ctx as never,
+      'tools/execute',
+      {
+        name: 'web_search',
+        arguments: { queries: ['query'] },
+        signal: new AbortController().signal,
+        agent: {
+          options: { provider: 'another-provider', model: 'another-model' },
+          session: { requestHeader: () => undefined },
+        },
+      } as never,
+      next,
+    )
+
+    expect(result).toBe(downstream)
+    expect(next).toHaveBeenCalledOnce()
+  })
+
+  it('registers live capability settings and stops taking over search when disabled', async () => {
+    const ctx = await context()
+    await ctx.plugin(MemorySettings)
+    await ctx.plugin(CodexAppServer, {})
+
+    expect(ctx.settings.describe().find(entry => entry.ns === CodexAppServer.CODEX_SETTINGS_NAMESPACE))
+      .toMatchObject({
+        value: {
+          imageGenerationEnabled: true,
+          webSearchEnabled: true,
+          webSearchMaxResults: 8,
+        },
+        applies: 'live',
+      })
+    await ctx.settings.update(CodexAppServer.CODEX_SETTINGS_NAMESPACE, {
+      imageGenerationEnabled: false,
+      webSearchEnabled: false,
+      webSearchModel: 'gpt-5.4-mini',
+      webSearchMaxResults: 3,
+    })
+
+    const downstream = { isError: false as const, value: null, content: [] }
+    const next = vi.fn(async () => downstream)
+    await expect(ctx.waterfall(
+      ctx as never,
+      'tools/execute',
+      {
+        name: 'web_search',
+        arguments: { queries: ['query'] },
+        signal: new AbortController().signal,
+        agent: {
+          options: { provider: 'codex-local', model: 'gpt-5.6-sol' },
+          session: { requestHeader: () => undefined },
+        },
+      } as never,
+      next,
+    )).resolves.toBe(downstream)
+    expect(next).toHaveBeenCalledOnce()
+
+    await expect(ctx.settings.update(CodexAppServer.CODEX_SETTINGS_NAMESPACE, {
+      webSearchModel: '../unsafe model',
+    })).rejects.toThrow(/webSearchModel/u)
   })
 })

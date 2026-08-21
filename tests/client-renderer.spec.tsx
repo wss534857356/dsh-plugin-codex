@@ -226,11 +226,26 @@ describe('Codex Assistant renderer', () => {
   it('shadows the stock assistant cell without replacing its slot declaration', () => {
     const register = vi.fn(() => () => {})
     const localeRegister = vi.fn(() => () => {})
+    const settingsScope = {
+      getSnapshot: () => ({
+        status: 'ready' as const,
+        value: {},
+        base: {},
+        user: {},
+        revision: 0,
+        writable: true,
+        mode: 'host' as const,
+      }),
+      subscribe: () => () => {},
+      set: vi.fn(async () => {}),
+      unset: vi.fn(async () => {}),
+    }
     const ctx = {
       effect(factory: () => () => void) {
         factory()
       },
       locale: { register: localeRegister },
+      settingsScope: { bind: vi.fn(() => settingsScope) },
       slots: {
         inject(_name: string, factory: () => () => void) {
           factory()
@@ -248,5 +263,10 @@ describe('Codex Assistant renderer', () => {
       priority: -10,
       locale: NS,
     }), expect.any(Object))
+    expect(register).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'settings.plugin.item',
+      key: 'llm-codex-app-server',
+      locale: NS,
+    }), expect.any(Function))
   })
 })

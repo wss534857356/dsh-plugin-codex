@@ -62,3 +62,6 @@
         maxStderrBytes: 65536
         maxCachedSessions: 8
         sessionIdleTimeoutMs: 600000
+        imageGenerationEnabled: true
+        webSearchEnabled: true
+        webSearchMaxResults: 8

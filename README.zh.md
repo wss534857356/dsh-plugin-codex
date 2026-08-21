@@ -16,11 +16,13 @@
 
 Harness 用户图片和含图片的工具结果在消息、重放与缓存身份中始终保留为持久 `ImageAttachmentRef`。只有即将跨越 App Server 边界时，适配器才会验证保留的附件，并临时转换为对应协议形态：冷启动重建使用 Responses `input_image`，热用户 turn 使用 v2 `image`，待处理动态工具 callback 使用 `inputImage`。若预计的 base64 图片负载超过 `maxRequestImageBytes`，最旧的模型可见图片会被确定性省略文本替代，而且不会读取其字节。Codex 原生图片输出沿反方向处理：先解码并通过 Harness 附件服务持久提交，再发布标准 Harness `image` 块，同时把轨迹和重放中的字节替换为小型持久标记。任何 data URL 都不会持久化。聊天附件不等于隐式修改工作区：要生成 `public/example.png` 或其他项目文件，Codex 仍须为明确的目标路径请求已声明的 Harness 修改工具。
 
-本包还包含浏览器插件。它以较低的 slot 优先级覆盖默认 Assistant 单元格，保留标准文本、推理、图片和通用回退展示，并使用 Harness 的紧凑 disclosure row 与状态点渲染 `codex-action` 块。图片组会委托给 rc.8 的 `conversation.message.images` slot；标准 Web profile 已组合其 `ui-attachment` owner，自定义 host 则须像默认 Assistant 渲染器一样组合该展示插件。折叠行显示解析后的动作、类别和阶段；展开后显示摘要、准确的协议事件、动作 ID，以及 Harness JSON tree 中的持久 JSON 记录。`thread/start` 会明确报告分层 prompt 所有权和发现的指令来源数量；它不会被标记为 Harness 工具或请求失败。
+本包还包含浏览器插件。它以较低的 slot 优先级覆盖默认 Assistant 单元格，保留标准文本、推理、图片和通用回退展示，并使用 Harness 的紧凑 disclosure row 与状态点渲染 `codex-action` 块。图片组会委托给 rc.8 的 `conversation.message.images` slot；标准 Web profile 已组合其 `ui-attachment` owner，自定义 host 则须像默认 Assistant 渲染器一样组合该展示插件。折叠行显示解析后的动作、类别和阶段；展开后显示摘要、准确的协议事件、动作 ID，以及 Harness JSON tree 中的持久 JSON 记录。`thread/start` 会明确报告分层 prompt 所有权和发现的指令来源数量；它不会被标记为 Harness 工具或请求失败。浏览器插件还通过 DSH 原生 `settings.plugin.item` 扩展点贡献 Codex App Server 设置卡片，不修改 Models 或 Settings 核心包。
 
 `thread/start` 块用于披露提供方生命周期，并不表示模型执行了原生动作。由 Codex 添加、且不属于注入的 Harness 历史记录的 developer、system 和 user 消息会显示为 `context/injected` 报告。它们会被记录以供审计，但不会在下一个无状态请求中作为 Harness 编写的历史内容再次提交。
 
 当 App Server 请求 `deepseek_harness` 命名空间内的已声明工具时，适配器会发出真正的 Harness `tool-call`，结束当前模型 step，并保持 App Server callback 待处理。命名空间和映射后的名称必须同时匹配，调用才能进入 Harness；`harness_skill` 还必须准确匹配当前 Harness 目录中的名称，并且只有验证后才会映射回 `skill`。即使未带命名空间的 Codex 原生调用名称与 Harness 工具相似，它仍属于提供方轨迹；只有经过验证、带 Harness 命名空间的调用才不会显示为原生动作。Harness 负责这些调用的执行、审批、展示和持久记录。后续仅追加请求会先用已记录的工具结果回复待处理 callback，再把后续 inbox 消息按顺序 steer 进 active turn，并继续同一个 Codex turn；replacement 或其他非前缀历史变化会触发冷启动重建。
+
+辅助工作跟随发起 Agent 的 provider，不会暗中切换账户。`compaction-basic` 未显式指定摘要路由时，会通过一次性进程使用当前选中的 Codex 模型，并且只有自然完成的文本才会成为持久 Harness checkpoint。Codex Agent 的 `web_search` 会在配置的 Web provider 之前被条件接管：每个 query 都在独立的一次性 App Server 进程中执行原生实时搜索，URL citation 再经原有 Harness 工具输出约定投影；非 Codex Agent 则原样委托给既有 provider chain。搜索不能复用主进程，因为该线程正在等待 Harness 工具结果。
 
 ## 安装
 
@@ -40,7 +42,7 @@ pnpm run check
 将生成的 tarball 安装到 Harness profile：
 
 ```sh
-dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.17.tgz
+dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.19.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
@@ -65,6 +67,8 @@ dsh plugin --profile web remove dsh-llm-codex-app-server
 
 ## 配置
 
+在 Web UI 打开“设置 → 插件 → 插件配置”，展开 **Codex App Server** 卡片即可修改 image generation、Codex Web Search 接管、搜索默认模型和最大结果数。卡片使用 DSH 的 `llm-codex-app-server` settings 命名空间，保存后直接写入 DSH 用户设置层；下一次调用即生效，涉及进程能力的变化会通过请求 epoch 自动淘汰旧缓存线程。
+
 后续 profile 补丁层可以替换 `llm-codex-app-server` 配置项。Harness 补丁配置项不会深度合并，因此替换时必须重新写出完整配置。
 
 | 配置键 | 默认值 | 说明 |
@@ -81,6 +85,10 @@ dsh plugin --profile web remove dsh-llm-codex-app-server
 | `maxRetries` | `0` | Harness 可见的临时进程或提供方错误重试次数。 |
 | `maxCachedSessions` | `8` | 按最近最少使用策略驱逐前，可保留的最大空闲或等待工具结果的 Session 租约数。活跃请求可能暂时超过该值。 |
 | `sessionIdleTimeoutMs` | `600000` | 已缓存 App Server Session 线程的空闲存活时间。 |
+| `imageGenerationEnabled` | `true` | 普通模型 turn 是否为固定版本 App Server 开启原生 image generation。压缩 turn 始终关闭。 |
+| `webSearchEnabled` | `true` | 是否条件接管由本 Codex provider 发起的 `web_search`；关闭后继续交给原 DSH Web provider chain。 |
+| `webSearchModel` | 跟随主模型 | 插件拥有的搜索专用模型覆盖；留空时使用发起调用的 Codex 主模型。Codex 官方配置没有独立的 Web Search 模型键。 |
+| `webSearchMaxResults` | `8` | 合并条件接管的 Codex 原生搜索后所保留的 source 上限。 |
 | `env` | `{}` | 叠加到经 Harness 清理的父进程环境之上的显式子进程环境。`CODEX_HOME` 不在标准位置时，请通过此项传入。 |
 
 覆盖配置示例：
@@ -107,6 +115,10 @@ dsh plugin --profile web remove dsh-llm-codex-app-server
     maxRetries: 0
     maxCachedSessions: 8
     sessionIdleTimeoutMs: 600000
+    imageGenerationEnabled: true
+    webSearchEnabled: true
+    webSearchModel: gpt-5.4-mini
+    webSearchMaxResults: 8
     env:
       CODEX_HOME: !!js process.env.CODEX_HOME
 ```
@@ -117,13 +129,14 @@ dsh plugin --profile web remove dsh-llm-codex-app-server
 - 默认目录展示每个模型的完整上下文窗口：GPT-5.4、GPT-5.5 和 GPT-5.6 系列为 `1050000`，`gpt-5.4-mini` 为 `400000`，`gpt-5.3-codex-spark` 为 `128000`。固定版本的 App Server 可能在用量通知中报告较小的有效工作窗口。部署环境若强制使用该较小限制，可以覆盖模型元数据；由提供方确认的上下文溢出仍可触发 Harness 压缩和重试。
 - 默认模型目录是 2026-08-20 使用 App Server `0.147.0` 观测到的 `model/list` 快照：GPT-5.6 Sol/Terra/Luna、GPT-5.5、GPT-5.4 和 GPT-5.4 Mini 声明文本+图片输入，GPT-5.3 Codex Spark 仅文本。服务端/账户目录可独立变化，因此每次升级 Codex 都必须重新探测。未声明 `inputModalities` 的自定义条目和未列出的模型 ID 仍按仅文本处理。
 - Codex 共同拥有模型可见指令和工具目录。无需密钥的协议测试记录了在应用受支持的线程覆盖配置后仍然存在的额外权限、主 agent、协作、环境、交互和 Code Mode 层。
-- Code Mode 保持启用，因为 `gpt-5.6-sol` 使用它分派 App Server 动态工具。Codex 原生图片生成和图片查看同样保持启用，以确保 Codex 的 `imagegen` skill 仍拥有所需工具；其他无关的可选原生集成保持禁用。
+- Code Mode 保持启用，因为 `gpt-5.6-sol` 使用它分派 App Server 动态工具。原生图片查看保持启用；普通 turn 的 image generation 默认启用，但可在插件设置卡片关闭，压缩和搜索进程则始终关闭。该 image generation 开关属于固定 App Server `0.147.0` 的能力标志，并非 Codex 官方配置中承诺稳定的顶层键。其他无关的可选原生集成保持禁用。
 - 图片输入、含图片的工具结果和原生生成图片都需要 profile 提供持久 `ctx.attachments` 服务。图片字节受该服务的媒体类型、单图字节数、数量、总字节数、像素和单边尺寸限制约束，绝不会以内联形式存入消息、`codex-action` 块或重放状态。
 - Codex 原生动作仍可能发生。它们运行在私有空工作目录中，使用只读 sandbox，并将审批策略设为 `never`；其生命周期快照显示为提供方轨迹。除非协议可以在不使用用户权限的情况下回答，否则审批或交互请求会被安全拒绝。
 - `thread/start` 生命周期报告会显示发现的指令来源。非空报告属于信息披露，并不代表请求失败。不在该列表中的 Codex 生成上下文会单独显示为 `context/injected`。
 - 明确声明 `image` 的模型接受有序的纯图片或文本/图片混合用户提示，以及含图片的 Harness 工具结果。仅文本、不可用、未声明模态的自定义模型和未列出的路由会在进程启动前拒绝图片历史。
-- App Server `0.147.0` 没有公开可靠的对应选项，因此会拒绝 `temperature`、`maxTokens` 和 `stop`。依赖 `maxTokens` 的辅助调用（包括由 LLM 生成 Session 标题和 Basic compaction）必须路由到其他提供方；请为 `compaction-basic` 配置支持输出上限的 `summarizationProvider`/`summarizationModel` 组合。
-- App Server 自动压缩阈值设为 Harness 的安全整数上限，使 Harness 可以优先替换已记录历史。任何原生压缩 item 或通知仍会使实时租约不可复用，并且绝不会写入可重建的重放状态。Basic compaction 必须使用支持其 `maxTokens` 要求的摘要提供方。
+- App Server `0.147.0` 没有公开可靠的对应选项，因此会拒绝 `temperature` 和 `stop`；普通请求与 Session 标题请求同样拒绝 `maxTokens`。只有 `purpose: compaction` 会把它接受为 Harness 的建议预算，移除实时工具声明，并等待 Codex 摘要自然完成；App Server 无法强制执行该数值上限。
+- App Server 自动压缩阈值仍设为 Harness 的安全整数上限，使持久 Harness 摘要优先替换已记录历史。任何原生压缩 item 或通知仍会使实时租约不可复用，并且绝不会写入可重建的重放状态。不要设置 `compaction-basic.summarizationProvider` 与 `summarizationModel`，即可跟随 Agent 当前选择的 Codex 路由。
+- Codex 发起的 `web_search` 会在隔离的一次性进程中使用 Codex 原生实时搜索，并且只返回可引用的 HTTP(S) source。默认跟随发起 Agent 的模型，也可由卡片设置插件自己的搜索模型覆盖；关闭接管或遇到非 Codex Agent 时，around-dispatch listener 会原样调用 `next()`，因此安装本组合包既不会移除也不会复制原有 Web provider 实现。
 - `CODEX_INTERNAL_ORIGINATOR_OVERRIDE=deepseek-harness` 用于标识适配器请求；升级 Codex 时会重新验证这一内部兼容点。
 - Session 级线程属于内存中的可丢弃缓存。进程重启、插件重载、过期、驱逐、压缩、fork、修复、重试不匹配或请求 epoch 发生任何变化后，Harness 日志与适配器重放状态会重建模型可见历史；不会恢复 Codex rollout 文件。
 - Harness rc.8 会把适配器重放放在 `ReplayEnvelope.response` 中；插件仍兼容 envelope 之前的版本 4 Session。重放状态版本 `4` 的 `items` 只包含提供方输出；观测到的 Codex 自有上下文单独保存在 `contextItems` 中供审计，绝不会重新注入。用户、工具和生成图片负载都使用持久附件标记。冷启动重建会恢复仍保留的模型可见标记；热续接只恢复新增用户消息或工具结果的内容。Harness 调用仍保留 `deepseek_harness` 命名空间和映射后的 App Server 名称。重建逻辑按稳定的提供方 item 或调用标识合并累积快照，丢弃新进程无法恢复的未配对 Code Mode custom call/output，更旧的重放版本则回退到 Harness 消息重建。
@@ -131,7 +144,7 @@ dsh plugin --profile web remove dsh-llm-codex-app-server
 
 ## 开发
 
-[ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) 根据 [提供方调查](docs/app-server-provider-plan.md) 捕获的出站请求中 Codex 自有指令与工具，否决了原始传输层方案。[ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) 接受当前实现的所有权划分。[ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) 记录原始动作、提供方上下文、重放和 Harness 工具调用如何保持相互独立。[ADR 0004](docs/adr/0004-render-codex-trajectory-in-the-browser-plugin.md) 记录独立组合包使用的客户端渲染器覆盖层。[ADR 0005](docs/adr/0005-coalesce-stateless-codex-replay.md) 按提供方标识约束冷启动重放重建。[ADR 0006](docs/adr/0006-reuse-disposable-session-threads.md) 定义精确的 Session 续接和可丢弃缓存所有权。[ADR 0007](docs/adr/0007-namespace-harness-dynamic-tools.md) 将 App Server 命名空间定义为工具所有权标签。[ADR 0008](docs/adr/0008-retain-native-image-tools.md) 保留 Codex 图片 skill 所需的原生图片工具。[ADR 0009](docs/adr/0009-externalize-native-generated-images.md) 记录持久生成图片投影。[ADR 0010](docs/adr/0010-bridge-durable-image-input.md) 定义基于标记的图片输入、有界恢复与真实模态声明。
+[ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) 根据 [提供方调查](docs/app-server-provider-plan.md) 捕获的出站请求中 Codex 自有指令与工具，否决了原始传输层方案。[ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) 接受当前实现的所有权划分。[ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) 记录原始动作、提供方上下文、重放和 Harness 工具调用如何保持相互独立。[ADR 0004](docs/adr/0004-render-codex-trajectory-in-the-browser-plugin.md) 记录独立组合包使用的客户端渲染器覆盖层。[ADR 0005](docs/adr/0005-coalesce-stateless-codex-replay.md) 按提供方标识约束冷启动重放重建。[ADR 0006](docs/adr/0006-reuse-disposable-session-threads.md) 定义精确的 Session 续接和可丢弃缓存所有权。[ADR 0007](docs/adr/0007-namespace-harness-dynamic-tools.md) 将 App Server 命名空间定义为工具所有权标签。[ADR 0008](docs/adr/0008-retain-native-image-tools.md) 保留 Codex 图片 skill 所需的原生图片工具。[ADR 0009](docs/adr/0009-externalize-native-generated-images.md) 记录持久生成图片投影。[ADR 0010](docs/adr/0010-bridge-durable-image-input.md) 定义基于标记的图片输入、有界恢复与真实模态声明。[ADR 0011](docs/adr/0011-follow-codex-for-auxiliary-work.md) 规定 compaction 与 web search 跟随发起 Codex 路由，同时不改变非 Codex 工具执行。
 
 ```sh
 pnpm run typecheck

@@ -3,12 +3,23 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-tools'
+import type { WebSearchResult, WebSearchSource } from '@deepseek-ai/dsh-web'
 import type { ModelModality } from '@deepseek-ai/dsh-llm'
+import { installSettingsSection } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { CodexAppServerAdapter } from './adapter.ts'
 import type { CodexModel } from './adapter.ts'
 import { SAFE_MODEL_ID, SAFE_REASONING_EFFORT } from './identifiers.ts'
 import { CodexAppServerRunner } from './runner.ts'
+import {
+  CODEX_SETTINGS_NAMESPACE,
+  codexCapabilitySettingsFields,
+  CodexCapabilitySettingsSchema,
+  resolveCodexCapabilitySettings,
+} from './settings.ts'
+import type { CodexCapabilitySettings, ResolvedCodexCapabilitySettings } from './settings.ts'
+import { CodexWebSearchProvider } from './web-search.ts'
 
 export { CodexAppServerAdapter } from './adapter.ts'
 export type { CodexAdapterOptions, CodexModel } from './adapter.ts'
@@ -41,12 +52,20 @@ export type {
   CodexAppServerTurnRequest,
   JsonValue,
 } from './runner.ts'
+export { CodexWebSearchProvider } from './web-search.ts'
+export type { CodexSearchTarget, CodexWebSearchProviderOptions } from './web-search.ts'
+export {
+  CODEX_SETTINGS_NAMESPACE,
+  CodexCapabilitySettingsSchema,
+  resolveCodexCapabilitySettings,
+} from './settings.ts'
+export type { CodexCapabilitySettings, ResolvedCodexCapabilitySettings } from './settings.ts'
 
 export const name = 'llm-codex-app-server'
-export const inject = ['llm', 'subprocess']
+export const inject = ['llm', 'subprocess', 'tools']
 
 /** Plugin configuration for one static provider route. */
-export interface Config {
+export interface Config extends CodexCapabilitySettings {
   provider?: string
   displayName?: string
   modelProvider?: string
@@ -164,6 +183,7 @@ export const Config: z<Config> = z.object({
   maxRetries: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(0),
   maxCachedSessions: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(8),
   sessionIdleTimeoutMs: z.number().step(1).min(1).max(2_147_483_647).default(600_000),
+  ...codexCapabilitySettingsFields,
   env: z.dict(z.string()).default({}),
 })
 
@@ -180,6 +200,7 @@ interface ResolvedConfig {
   readonly maxRetries: number
   readonly maxCachedSessions: number
   readonly sessionIdleTimeoutMs: number
+  readonly capabilities: ResolvedCodexCapabilitySettings
   readonly env: Readonly<Record<string, string>>
 }
 
@@ -197,6 +218,7 @@ function resolveConfig(config: Config): ResolvedConfig {
   const maxRetries = config.maxRetries ?? 0
   const maxCachedSessions = config.maxCachedSessions ?? 8
   const sessionIdleTimeoutMs = config.sessionIdleTimeoutMs ?? 600_000
+  const capabilities = resolveCodexCapabilitySettings(config)
   const env = config.env ?? {}
   if (!SAFE_ROUTE.test(provider)) throw new Error('llm-codex-app-server: provider is not a safe route id')
   if (displayName.trim().length === 0) throw new Error('llm-codex-app-server: displayName must not be empty')
@@ -275,13 +297,71 @@ function resolveConfig(config: Config): ResolvedConfig {
     maxRetries,
     maxCachedSessions,
     sessionIdleTimeoutMs,
+    capabilities,
     env,
   }
+}
+
+function mergeSearchResults(
+  queries: readonly string[],
+  results: readonly WebSearchResult[],
+  maxResults: number,
+): WebSearchResult {
+  const seen = new Set<string>()
+  const sources: WebSearchSource[] = []
+  const ranks = Math.max(0, ...results.map(result => result.sources.length))
+  let dropped = false
+  merge: for (let rank = 0; rank < ranks; rank++) {
+    for (const result of results) {
+      const source = result.sources[rank]
+      if (source === undefined || seen.has(source.url)) continue
+      seen.add(source.url)
+      if (sources.length === maxResults) {
+        dropped = true
+        break merge
+      }
+      sources.push(source)
+    }
+  }
+  const content = results.flatMap((result, index) => result.content === undefined
+    ? []
+    : [`### ${queries[index]}\n\n${result.content}`])
+  return {
+    ...(content.length === 0 ? {} : { content: content.join('\n\n') }),
+    sources,
+    truncated: dropped || results.some(result => result.truncated),
+  }
+}
+
+async function runCodexSearches(
+  search: CodexWebSearchProvider,
+  target: { readonly provider: string; readonly model: string },
+  queries: readonly string[],
+  maxResults: number,
+  signal: AbortSignal,
+): Promise<WebSearchResult> {
+  const controller = new AbortController()
+  const combined = AbortSignal.any([signal, controller.signal])
+  let firstFailure: { readonly error: unknown } | undefined
+  const results: WebSearchResult[] = []
+  await Promise.allSettled(queries.map(async (query, index) => {
+    try {
+      results[index] = await search.search(target, { query, maxResults }, combined)
+    } catch (error: unknown) {
+      if (firstFailure === undefined) firstFailure = { error }
+      controller.abort(error)
+      throw error
+    }
+  }))
+  if (firstFailure !== undefined) throw firstFailure.error
+  return mergeSearchResults(queries, results, maxResults)
 }
 
 /** Register the configured Codex App Server route on `ctx.llm`. */
 export function apply(ctx: Context, config: Config): void {
   const resolved = resolveConfig(config)
+  let capabilitySource: () => CodexCapabilitySettings = () => resolved.capabilities
+  const capabilities = (): ResolvedCodexCapabilitySettings => resolveCodexCapabilitySettings(capabilitySource())
   const runner = new CodexAppServerRunner({
     timeoutMs: resolved.timeoutMs,
     disposeGraceMs: resolved.disposeGraceMs,
@@ -304,11 +384,50 @@ export function apply(ctx: Context, config: Config): void {
     sessionIdleTimeoutMs: resolved.sessionIdleTimeoutMs,
     onCleanupError: reportCleanupError,
     resolveAttachments: () => ctx.get('attachments'),
+    resolveImageGenerationEnabled: () => capabilities().imageGenerationEnabled,
     runner,
   })
   ctx.llm.registerAdapter([resolved.provider], adapter)
+  const search = new CodexWebSearchProvider({
+    modelProvider: resolved.modelProvider,
+    runner,
+  })
+  ctx.on('tools/execute', async (exec, next) => {
+    if (exec.name !== 'web_search' || exec.agent === undefined) return next()
+    const capability = capabilities()
+    if (!capability.webSearchEnabled) return next()
+    const routed = exec.agent.session.requestHeader()?.config
+    const provider = routed?.provider ?? exec.agent.options.provider
+    const model = routed?.model ?? exec.agent.options.model
+    if (provider !== resolved.provider || model === undefined) return next()
+    const args = exec.arguments as { readonly queries?: unknown }
+    if (!Array.isArray(args.queries) || !args.queries.every(query => typeof query === 'string')) {
+      return next()
+    }
+    const value = await runCodexSearches(
+      search,
+      { provider, model: capability.webSearchModel ?? model },
+      args.queries,
+      capability.webSearchMaxResults,
+      exec.signal,
+    )
+    return { isError: false, value: value as never, content: [] }
+  })
   ctx.on('session/disposed', (session) => {
     void adapter.disposeSession(String(session.id)).catch(reportCleanupError)
   })
+  installSettingsSection(
+    ctx,
+    CODEX_SETTINGS_NAMESPACE,
+    CodexCapabilitySettingsSchema,
+    resolved.capabilities,
+    {
+      setSource: (source) => { capabilitySource = source },
+      // Operations resolve a fresh snapshot and cached threads include it in
+      // their epoch, so no registration-level fact needs rebuilding here.
+      onChange: () => {},
+      validate: (value) => { resolveCodexCapabilitySettings(value) },
+    },
+  )
   ctx.effect(() => () => adapter.dispose(), 'llm-codex-app-server: dispose cached sessions')
 }

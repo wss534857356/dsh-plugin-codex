@@ -59,6 +59,8 @@ export interface CodexAdapterOptions {
   readonly sessionIdleTimeoutMs: number
   readonly onCleanupError: (error: unknown) => void
   readonly resolveAttachments: () => CodexImageStorePort | undefined
+  /** Resolve the live settings snapshot captured by the next model operation. */
+  readonly resolveImageGenerationEnabled?: () => boolean
   readonly runner: CodexAppServerRunnerPort
 }
 
@@ -142,7 +144,14 @@ export class CodexAppServerAdapter extends LlmAdapter {
   }
 
   override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    if (options.temperature !== undefined || options.maxTokens !== undefined || options.stop !== undefined) {
+    const compaction = options.purpose === 'compaction'
+    // Compaction is a closed text generation. Even when ordinary turns expose
+    // image generation, a summarizer must not be able to start unrelated work.
+    const imageGenerationEnabled = !compaction
+      && (this.options.resolveImageGenerationEnabled?.() ?? true)
+    if (options.temperature !== undefined
+      || (options.maxTokens !== undefined && !compaction)
+      || options.stop !== undefined) {
       throw new LlmError(
         'Codex App Server provider does not support temperature, maxTokens, or stop overrides',
         'UNSUPPORTED_OPTION',
@@ -162,7 +171,10 @@ export class CodexAppServerAdapter extends LlmAdapter {
     )
     const images = new NativeImageBridge(this.options.resolveAttachments)
     images.rememberHistory(history)
-    const dynamicTools = appServerDynamicTools(options.tools, options.messages)
+    // The compaction instruction is a closed auxiliary generation. Replaying
+    // the historical tool items preserves meaning, but re-declaring live tools
+    // would let the summarizer start new work instead of producing a checkpoint.
+    const dynamicTools = compaction ? [] : appServerDynamicTools(options.tools, options.messages)
     const mapper = new AppServerEventMapper(history, options.tools?.map(tool => tool.name))
     const reasoningEffort = options.reasoningEffort === undefined
       ? undefined
@@ -178,17 +190,19 @@ export class CodexAppServerAdapter extends LlmAdapter {
         system: options.system ?? '',
         history: injectedHistory,
         dynamicTools,
+        imageGenerationEnabled,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
       })
     } else {
       cached = await this.cache.begin({
         sessionId: String(options.sessionId),
-        epoch: this.cacheEpoch(options, dynamicTools),
+        epoch: this.cacheEpoch(options, dynamicTools, imageGenerationEnabled),
         thread: {
           model: options.model,
           modelProvider: this.options.modelProvider,
           system: options.system ?? '',
           dynamicTools,
+          imageGenerationEnabled,
         },
         history,
         loadInjectedHistory: () => images.hydrateHistory(history, options.signal),
@@ -256,7 +270,11 @@ export class CodexAppServerAdapter extends LlmAdapter {
     return this.cache.dispose()
   }
 
-  private cacheEpoch(options: GenerateOptions, dynamicTools: readonly JsonValue[]): JsonValue {
+  private cacheEpoch(
+    options: GenerateOptions,
+    dynamicTools: readonly JsonValue[],
+    imageGenerationEnabled: boolean,
+  ): JsonValue {
     return {
       version: 1,
       appServerVersion: CODEX_APP_SERVER_VERSION,
@@ -266,6 +284,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
       reasoningEffort: options.reasoningEffort === undefined ? null : String(options.reasoningEffort),
       system: options.system ?? '',
       dynamicTools: [...dynamicTools],
+      imageGenerationEnabled,
       maxRequestImageBytes: this.options.maxRequestImageBytes,
       threadPolicy: 'harness-read-only-no-native-compaction-image-input-v1',
     }
