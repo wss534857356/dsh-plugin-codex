@@ -1,0 +1,272 @@
+{
+  "capturedAt": "2026-08-21T15:59:53.802Z",
+  "app": {
+    "url": "http://127.0.0.1:3080",
+    "title": "DSH Local Build",
+    "pluginEntry": {
+      "id": "dsh-llm-codex-app-server",
+      "url": "/plugins/dsh-llm-codex-app-server/client.js?rev=e6dc7736b496",
+      "rev": "e6dc7736b496",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "browser": {
+    "product": "Edg/151.0.4129.93",
+    "protocolVersion": "1.3",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0"
+  },
+  "actions": [
+    {
+      "action": "reload",
+      "result": {
+        "url": "http://127.0.0.1:3080/",
+        "readyState": "complete"
+      }
+    },
+    {
+      "action": "open-settings",
+      "result": {
+        "text": "设置",
+        "aria": null,
+        "expanded": "false"
+      }
+    },
+    {
+      "action": "open-plugins-section",
+      "result": {
+        "text": "插件",
+        "aria": null,
+        "expanded": null
+      }
+    },
+    {
+      "action": "open-plugin-configuration-tab",
+      "result": {
+        "text": "插件配置",
+        "aria": null,
+        "expanded": null
+      }
+    },
+    {
+      "action": "expand-codex-settings-card",
+      "result": {
+        "text": "Codex App Server\n控制 Codex 原生能力与 Harness Web Search 接管策略。\n⌄",
+        "aria": "展开设置: Codex App Server",
+        "expanded": "false"
+      }
+    },
+    {
+      "action": "settings.describe",
+      "result": {
+        "status": 200,
+        "rpcMatched": true,
+        "ok": true
+      }
+    }
+  ],
+  "card": {
+    "title": "Codex App Server\n控制 Codex 原生能力与 Harness Web Search 接管策略。\n⌄",
+    "expanded": "true",
+    "text": "Codex App Server\n控制 Codex 原生能力与 Harness Web Search 接管策略。\n⌄\nImage generation\n已开启\n\n控制普通 Codex 会话是否加载固定版本 App Server 的原生图像生成能力；压缩会话始终关闭。\n\nCodex Web Search 接管\n已开启\n\n关闭后，Codex 发起的 web_search 会继续交给 DSH 原有搜索 provider。\n\nWeb Search 默认模型\n已覆盖\n恢复默认\n\n留空时跟随发起搜索的主模型，也可填写当前 Codex 登录可用的其他模型。\n\nWeb Search 最大结果数\n\n多查询结果合并、去重后最多返回的来源数。\n\n保存后对下一次调用生效；需要新进程的能力会自动使旧缓存失效。\n\n放弃修改\n保存",
+    "inputs": [
+      {
+        "id": "codex-web-search-model",
+        "value": "gpt-5.6-luna",
+        "disabled": false,
+        "invalid": null
+      },
+      {
+        "id": "codex-web-search-max-results",
+        "value": "8",
+        "disabled": false,
+        "invalid": null
+      }
+    ],
+    "switches": [
+      {
+        "label": "Image generation: 已开启",
+        "checked": "true",
+        "disabled": false
+      },
+      {
+        "label": "Codex Web Search 接管: 已开启",
+        "checked": "true",
+        "disabled": false
+      }
+    ],
+    "cardRect": {
+      "x": 532,
+      "y": 326.5,
+      "width": 556,
+      "height": 573.5
+    },
+    "dialogRect": {
+      "x": 320,
+      "y": 100,
+      "width": 800,
+      "height": 800
+    }
+  },
+  "settings": {
+    "status": 200,
+    "rpcMatched": true,
+    "ok": true,
+    "namespace": {
+      "ns": "llm-codex-app-server",
+      "schema": {
+        "uid": 203,
+        "refs": {
+          "194": {
+            "type": "boolean",
+            "meta": {
+              "default": true
+            }
+          },
+          "196": {
+            "type": "boolean",
+            "meta": {
+              "default": true
+            }
+          },
+          "197": {
+            "type": "string",
+            "meta": {}
+          },
+          "202": {
+            "type": "number",
+            "meta": {
+              "step": 1,
+              "min": 1,
+              "max": 9007199254740991,
+              "default": 8
+            }
+          },
+          "203": {
+            "type": "object",
+            "meta": {
+              "default": {}
+            },
+            "dict": {
+              "imageGenerationEnabled": 194,
+              "webSearchEnabled": 196,
+              "webSearchModel": 197,
+              "webSearchMaxResults": 202
+            }
+          }
+        }
+      },
+      "value": {
+        "imageGenerationEnabled": true,
+        "webSearchEnabled": true,
+        "webSearchModel": "gpt-5.6-luna",
+        "webSearchMaxResults": 8
+      },
+      "base": {
+        "imageGenerationEnabled": true,
+        "webSearchEnabled": true,
+        "webSearchMaxResults": 8
+      },
+      "user": {
+        "webSearchModel": "gpt-5.6-luna"
+      },
+      "applies": "live",
+      "secrets": [],
+      "revision": 1
+    }
+  },
+  "network": {
+    "relevantResponses": [
+      {
+        "url": "http://127.0.0.1:3080/",
+        "status": 200,
+        "mimeType": "text/html",
+        "fromDiskCache": false,
+        "fromServiceWorker": false
+      },
+      {
+        "url": "http://127.0.0.1:3080/api/settings.describe",
+        "status": 200,
+        "mimeType": "application/json",
+        "fromDiskCache": false,
+        "fromServiceWorker": false
+      },
+      {
+        "url": "http://127.0.0.1:3080/api/settings.describe",
+        "status": 200,
+        "mimeType": "application/json",
+        "fromDiskCache": false,
+        "fromServiceWorker": false
+      },
+      {
+        "url": "http://127.0.0.1:3080/plugins/dsh-llm-codex-app-server/client.js?rev=e6dc7736b496",
+        "status": 200,
+        "mimeType": "text/javascript",
+        "fromDiskCache": false,
+        "fromServiceWorker": false
+      },
+      {
+        "url": "http://127.0.0.1:3080/api/settings.describe",
+        "status": 200,
+        "mimeType": "application/json",
+        "fromDiskCache": false,
+        "fromServiceWorker": false
+      }
+    ],
+    "failedRequests": []
+  },
+  "browserLog": {
+    "console": [
+      {
+        "type": "log",
+        "timestamp": 1787327757404.754,
+        "values": [
+          "%c dsh-chat-timeline %c v0.1.3 %c ⭐ https://github.com/jjxjjjjiik-bot/dsh-chat-timeline ",
+          "background:#4d6bfe;color:#fff;font-weight:600;padding:2px 6px;border-radius:4px 0 0 4px;",
+          "background:#2b2d31;color:#fff;padding:2px 6px;",
+          "background:#f3f4f6;color:#374151;border-radius:0 4px 4px 0;padding:2px 6px;"
+        ]
+      },
+      {
+        "type": "log",
+        "timestamp": 1787327993202.326,
+        "values": [
+          "%c dsh-chat-timeline %c v0.1.3 %c ⭐ https://github.com/jjxjjjjiik-bot/dsh-chat-timeline ",
+          "background:#4d6bfe;color:#fff;font-weight:600;padding:2px 6px;border-radius:4px 0 0 4px;",
+          "background:#2b2d31;color:#fff;padding:2px 6px;",
+          "background:#f3f4f6;color:#374151;border-radius:0 4px 4px 0;padding:2px 6px;"
+        ]
+      }
+    ],
+    "exceptions": [],
+    "entries": [],
+    "errorCount": 0
+  },
+  "screenshot": {
+    "path": "docs/images/codex-settings-card.png",
+    "bytes": 61026,
+    "sha256": "4b76587fb1e922326017d0dc13e22a5d46bfac84ccaa2cd40a5f66be27e71c24",
+    "clip": {
+      "x": 320,
+      "y": 100,
+      "width": 800,
+      "height": 800,
+      "scale": 1
+    }
+  },
+  "assertions": {
+    "cardExpanded": true,
+    "imageGenerationSwitchPresent": true,
+    "webSearchSwitchPresent": true,
+    "webSearchModelPresent": true,
+    "webSearchMaxResultsPresent": true,
+    "settingsNamespaceLive": true,
+    "noBrowserErrors": true,
+    "noFailedRequests": true
+  }
+}

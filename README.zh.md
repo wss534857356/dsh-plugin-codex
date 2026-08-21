@@ -6,6 +6,12 @@
 
 它与 Harness 内置的 `@deepseek-ai/dsh-subagent-codex` 不同。内置包将 Codex 暴露为接受委派的子 agent；本包注册到 `ctx.llm`，因此 Harness Agent loop 可以选择 `codex-local` 作为模型提供方。
 
+## 设置卡片
+
+![Codex App Server 设置卡片](docs/images/codex-settings-card.png)
+
+[CDP 截图日志与验证详情](docs/evidence/codex-settings-card.md)
+
 ## 工作方式
 
 在有界缓存租约有效期间，普通 Harness 会话会复用一个固定版本为 `@openai/codex@0.147.0`、运行于私有空目录中的 App Server 进程和一个临时线程。该进程使用 `CODEX_HOME` 下的原生 Codex 账户状态；插件不会读取、复制、记录或保存 OAuth token 与 API key。没有 Session ID 的请求和辅助请求仍使用一次性进程。

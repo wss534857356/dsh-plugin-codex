@@ -12,6 +12,10 @@ This differs from Harness's built-in `@deepseek-ai/dsh-subagent-codex`. The buil
 
 ![Model selector](docs/images/model-selector-screenshot.png)
 
+![Codex App Server settings card](docs/images/codex-settings-card.png)
+
+[CDP capture log and verification details](docs/evidence/codex-settings-card.md)
+
 ## How it works
 
 An ordinary Harness conversation session reuses one pinned `@openai/codex@0.147.0` App Server in a private empty directory and one ephemeral thread while its bounded cache lease remains valid. The process uses the native Codex account state under `CODEX_HOME`; the plugin never reads, copies, logs, or stores OAuth tokens or API keys. Requests without a session id and auxiliary requests remain one-shot.
