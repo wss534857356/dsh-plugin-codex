@@ -57,9 +57,19 @@ const args = process.platform === 'win32' ? [windowsNpmCli, ...packArgs] : packA
 const output = execFileSync(command, args, {
   cwd: ROOT,
   encoding: 'utf8',
-  env: { ...process.env, npm_config_loglevel: 'silent' },
+  env: {
+    ...process.env,
+    NO_COLOR: '1',
+    npm_config_ignore_scripts: 'true',
+    npm_config_loglevel: 'silent',
+  },
 })
-const [packed] = JSON.parse(output)
+// npm 10 can still forward prepare-script output before its JSON result even
+// when ignore-scripts is requested. Anchor on the pack result instead of
+// assuming stdout contains JSON alone; npm 11 emits the shorter form.
+const jsonStart = output.search(/\[\s*\{\s*"id"/u)
+if (jsonStart < 0) fail('npm pack did not emit a JSON package result')
+const [packed] = JSON.parse(output.slice(jsonStart))
 if (packed?.name !== manifest.name || packed?.version !== manifest.version) {
   fail('npm pack metadata does not match package.json')
 }
