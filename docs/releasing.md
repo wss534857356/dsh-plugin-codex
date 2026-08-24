@@ -28,17 +28,18 @@ npm publish --dry-run
 
 ## First npm publication
 
-The package does not exist on npm until the first release, so npm trusted publishing cannot be attached to it yet. Bootstrap it once through the release workflow:
+The package does not exist on npm until the first release, so npm trusted publishing cannot be attached to it yet. npm also requires account-level two-factor authentication before a maintainer can establish a trusted publisher. Bootstrap it once through the release workflow:
 
-1. Create an npm token that may publish the new public package.
-2. Add it to the GitHub repository as an Actions secret named `NPM_TOKEN`.
-3. Prepare and push the first version tag using the procedure below.
-4. After the package exists, open its npm settings and configure the trusted publisher with:
+1. Enable two-factor authentication on the publishing npm account.
+2. Create a short-lived granular npm token with package read/write permission and **Bypass 2FA** enabled.
+3. Add it to the GitHub repository as an Actions secret named `NPM_TOKEN`.
+4. Prepare and push the first version tag using the procedure below.
+5. After the package exists, open its npm settings and configure the trusted publisher with:
    - GitHub owner: `wss534857356`
    - Repository: `dsh-plugin-codex`
    - Workflow filename: `release.yml`
    - Allowed action: `npm publish`
-5. Remove the `NPM_TOKEN` repository secret. Future releases authenticate with short-lived GitHub OIDC credentials.
+6. Remove the `NPM_TOKEN` repository secret and revoke the bootstrap token. Future releases authenticate with short-lived GitHub OIDC credentials.
 
 The workflow deliberately keeps the optional `NPM_TOKEN` environment bridge so the first publication can use the secret and later publications can use OIDC without changing repository code.
 
