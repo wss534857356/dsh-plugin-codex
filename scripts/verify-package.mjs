@@ -28,7 +28,7 @@ function fail(message) {
 }
 
 const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-const tag = process.argv[2]
+const tag = process.argv[2] === '--' ? process.argv[3] : process.argv[2]
 
 if (manifest.name !== EXPECTED_NAME) fail(`package name must be ${EXPECTED_NAME}`)
 if (!/^\d+\.\d+\.\d+$/u.test(manifest.version)) {

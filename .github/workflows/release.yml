@@ -43,7 +43,7 @@ jobs:
       - name: Verify release tag and package
         id: package
         shell: bash
-        run: pnpm run package:verify -- "$GITHUB_REF_NAME"
+        run: pnpm run package:verify "$GITHUB_REF_NAME"
       - name: Publish exact tarball to npm
         run: npm publish "${{ steps.package.outputs.tarball }}" --access public --provenance
         env:
