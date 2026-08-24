@@ -42,17 +42,25 @@ Harness 用户图片和含图片的工具结果在消息、重放与缓存身份
 codex login
 ```
 
-构建当前工作副本并打包：
+npm release 可用后，可安装不可变的已发布版本：
 
 ```sh
-pnpm install
+dsh plugin --profile web add dsh-llm-codex-app-server@latest
+dsh --profile web --dump-config
+dsh --profile web
+```
+
+若要改为构建当前工作副本并打包：
+
+```sh
+pnpm install --frozen-lockfile
 pnpm run check
 ```
 
 将生成的 tarball 安装到 Harness profile：
 
 ```sh
-dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.19.tgz
+dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-<version>.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
@@ -153,6 +161,8 @@ dsh plugin --profile web remove dsh-llm-codex-app-server
 - 身份验证和订阅可用性由原生 Codex 安装负责。登录失败会显示为 Harness `AUTH` 错误；本插件不提供凭据 UI。
 
 ## 开发
+
+跨平台 CI 矩阵、npm 包内容校验、首次发布引导、trusted publisher 配置及版本 tag 流程见[构建与发布](docs/releasing.zh.md)。
 
 [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) 根据 [提供方调查](docs/app-server-provider-plan.md) 捕获的出站请求中 Codex 自有指令与工具，否决了原始传输层方案。[ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) 接受当前实现的所有权划分。[ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) 记录原始动作、提供方上下文、重放和 Harness 工具调用如何保持相互独立。[ADR 0004](docs/adr/0004-render-codex-trajectory-in-the-browser-plugin.md) 记录独立组合包使用的客户端渲染器覆盖层。[ADR 0005](docs/adr/0005-coalesce-stateless-codex-replay.md) 按提供方标识约束冷启动重放重建。[ADR 0006](docs/adr/0006-reuse-disposable-session-threads.md) 定义精确的 Session 续接和可丢弃缓存所有权。[ADR 0007](docs/adr/0007-namespace-harness-dynamic-tools.md) 将 App Server 命名空间定义为工具所有权标签。[ADR 0008](docs/adr/0008-retain-native-image-tools.md) 保留 Codex 图片 skill 所需的原生图片工具。[ADR 0009](docs/adr/0009-externalize-native-generated-images.md) 记录持久生成图片投影。[ADR 0010](docs/adr/0010-bridge-durable-image-input.md) 定义基于标记的图片输入、有界恢复与真实模态声明。[ADR 0011](docs/adr/0011-follow-codex-for-auxiliary-work.md) 规定 compaction 与 web search 跟随发起 Codex 路由，同时不改变非 Codex 工具执行。
 

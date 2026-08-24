@@ -1,8 +1,16 @@
 {
   "name": "dsh-llm-codex-app-server",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "DeepSeek Harness LLM provider backed by the locally authenticated Codex App Server",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wss534857356/dsh-plugin-codex.git"
+  },
+  "homepage": "https://github.com/wss534857356/dsh-plugin-codex#readme",
+  "bugs": {
+    "url": "https://github.com/wss534857356/dsh-plugin-codex/issues"
+  },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "exports": {
@@ -24,6 +32,8 @@
     "docs/adr",
     "docs/app-server-provider-plan.md",
     "docs/architecture.md",
+    "docs/releasing.md",
+    "docs/releasing.zh.md",
     "cordis.patch.yml",
     "README.md",
     "README.zh.md",
@@ -31,9 +41,12 @@
   ],
   "scripts": {
     "build": "tsdown && tsc --project tsconfig.build.json --emitDeclarationOnly",
-    "check": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm pack --pack-destination dist",
+    "check": "pnpm run release:verify && pnpm pack --pack-destination dist",
     "clean": "rimraf lib dist coverage",
+    "package:verify": "node scripts/verify-package.mjs",
     "prepare": "pnpm run build",
+    "prepublishOnly": "pnpm run release:verify",
+    "release:verify": "pnpm run typecheck && pnpm run test && pnpm run build && pnpm run package:verify",
     "test": "vitest run",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "typecheck": "tsc --noEmit"
@@ -60,6 +73,11 @@
     "plugin"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
   "packageManager": "pnpm@11.7.0",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

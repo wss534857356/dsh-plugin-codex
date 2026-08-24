@@ -42,17 +42,25 @@ Authenticate the native CLI once:
 codex login
 ```
 
-Build and pack this checkout:
+After a release is available from npm, install the immutable published version:
 
 ```sh
-pnpm install
+dsh plugin --profile web add dsh-llm-codex-app-server@latest
+dsh --profile web --dump-config
+dsh --profile web
+```
+
+To build and pack this checkout instead:
+
+```sh
+pnpm install --frozen-lockfile
 pnpm run check
 ```
 
 Install the generated tarball into a Harness profile:
 
 ```sh
-dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-0.1.19.tgz
+dsh plugin --profile web add ./dist/dsh-llm-codex-app-server-<version>.tgz
 dsh --profile web --dump-config
 dsh --profile web
 ```
@@ -153,6 +161,8 @@ Example override:
 - Authentication and subscription availability belong to the native Codex installation. Login failures surface as Harness `AUTH` failures; the plugin provides no credential UI.
 
 ## Development
+
+See [Build and release](docs/releasing.md) for the cross-platform CI matrix, npm package guard, first-publication bootstrap, trusted-publisher setup, and version-tag procedure.
 
 The raw-transport claim was rejected in [ADR 0001](docs/adr/0001-use-app-server-as-a-harness-owned-transport.md) after the [provider investigation](docs/app-server-provider-plan.md) captured Codex-owned instructions and tools on the outbound request. [ADR 0002](docs/adr/0002-use-app-server-as-a-layered-codex-provider.md) accepts the implemented ownership split. [ADR 0003](docs/adr/0003-separate-codex-trajectory-from-harness-tools-and-replay.md) records how raw actions, provider context, replay, and Harness tool calls remain distinct. [ADR 0004](docs/adr/0004-render-codex-trajectory-in-the-browser-plugin.md) records the client renderer shadow used by the out-of-tree bundle. [ADR 0005](docs/adr/0005-coalesce-stateless-codex-replay.md) bounds cold replay reconstruction by provider identity. [ADR 0006](docs/adr/0006-reuse-disposable-session-threads.md) defines exact session continuation and disposable cache ownership. [ADR 0007](docs/adr/0007-namespace-harness-dynamic-tools.md) makes the App Server namespace the tool-ownership label. [ADR 0008](docs/adr/0008-retain-native-image-tools.md) keeps the native image tools required by Codex's image skill. [ADR 0009](docs/adr/0009-externalize-native-generated-images.md) records durable generated-image projection. [ADR 0010](docs/adr/0010-bridge-durable-image-input.md) defines marker-based image input, bounded hydration, and truthful modality advertisement. [ADR 0011](docs/adr/0011-follow-codex-for-auxiliary-work.md) makes compaction and web search follow the initiating Codex route without changing non-Codex tool execution.
 
