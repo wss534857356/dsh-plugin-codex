@@ -84,7 +84,7 @@ for (const file of files) {
   }
 }
 
-const tarball = `dist/${packed.filename}`
+const tarball = `./dist/${packed.filename}`
 if (process.env.GITHUB_OUTPUT !== undefined) {
   appendFileSync(process.env.GITHUB_OUTPUT, `tarball=${tarball}\n`, 'utf8')
 }
