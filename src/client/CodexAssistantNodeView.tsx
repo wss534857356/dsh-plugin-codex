@@ -1,6 +1,6 @@
 import { Fragment, memo, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { AssistantBlock } from '@deepseek-ai/dsh-client-runtime/client'
+import type { AssistantBlock } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
   DisclosureRow,
   IconApiOutline14,
@@ -12,10 +12,14 @@ import {
   MarkdownText,
   StateDot,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
+import type {
+  JsonTreeLabels,
+  MarkdownFileMentions,
+  MarkdownLabels,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { RenderMessageImages, TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { RenderMessageImages } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { TurnTailOwnerProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { CodexActionBlock } from '../protocol.ts'
 import { NS } from './locales.ts'
 import css from './CodexAssistantNodeView.module.css'
@@ -166,6 +170,21 @@ export function actionSummary(block: CodexActionView, t: CodexTranslate): string
   return undefined
 }
 
+function jsonTreeLabels(t: CodexTranslate): JsonTreeLabels {
+  return {
+    copyValue: t('copy.value'),
+    copyJson: t('copy.json'),
+    copyPath: t('copy.path'),
+    copyPrettyJson: t('copy.prettyJson'),
+    copyCompactJson: t('copy.compactJson'),
+    copied: t('copied'),
+    copyFailed: t('copy.failed'),
+    collapseNode: t('json.collapseNode'),
+    expandNode: t('json.expandNode'),
+    copyButtonTitle: action => t('copy.optionsHint', { action }),
+  }
+}
+
 /** Expanded inspection content for a Codex-native trajectory row. */
 export function CodexActionDetails({ action, t }: { action: CodexActionView; t: CodexTranslate }) {
   const summary = actionSummary(action, t)
@@ -183,7 +202,12 @@ export function CodexActionDetails({ action, t }: { action: CodexActionView; t: 
           <dd><code>{action.actionId}</code></dd>
         </div>
       </dl>
-      <JsonTree className={css.actionJson} data={action.raw} label={t('action.details')} />
+      <JsonTree
+        className={css.actionJson}
+        data={action.raw}
+        label={t('action.details')}
+        labels={jsonTreeLabels(t)}
+      />
     </div>
   )
 }
@@ -275,7 +299,10 @@ export const CodexAssistantBody = memo(function CodexAssistantBody({
   mentions,
   t,
 }: CodexAssistantBodyProps) {
-  const codeLabels = useMemo(() => ({ copyLabel: t('copy'), copiedLabel: t('copied') }), [t])
+  const markdownLabels = useMemo<MarkdownLabels>(() => ({
+    code: { copyLabel: t('copy'), copiedLabel: t('copied') },
+    footnotes: t('markdown.footnotes'),
+  }), [t])
   const last = blocks.length - 1
   const hasVisible = streaming
     || interrupted === true
@@ -303,7 +330,7 @@ export const CodexAssistantBody = memo(function CodexAssistantBody({
             key={index}
             text={block.text}
             streaming={streaming}
-            codeLabels={codeLabels}
+            labels={markdownLabels}
             fileMentions={mentions}
           />,
         )

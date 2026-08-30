@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   SettingsScope,
   SettingsScopeSnapshot,
-} from '@deepseek-ai/dsh-client-runtime/client'
+} from '@deepseek-ai/dsh-client-ui-settings/client'
 import {
   CodexSettingsCardController,
   type CodexCapabilitySettingsView,
@@ -39,6 +39,10 @@ class FakeScope implements SettingsScope<CodexCapabilitySettingsView> {
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
+  }
+
+  mutate(): Promise<void> {
+    return Promise.resolve()
   }
 
   set(field: string, value: unknown): Promise<void> {

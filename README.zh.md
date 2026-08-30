@@ -26,7 +26,7 @@
 
 Harness 用户图片和含图片的工具结果在消息、重放与缓存身份中始终保留为持久 `ImageAttachmentRef`。只有即将跨越 App Server 边界时，适配器才会验证保留的附件，并临时转换为对应协议形态：冷启动重建使用 Responses `input_image`，热用户 turn 使用 v2 `image`，待处理动态工具 callback 使用 `inputImage`。若预计的 base64 图片负载超过 `maxRequestImageBytes`，最旧的模型可见图片会被确定性省略文本替代，而且不会读取其字节。Codex 原生图片输出沿反方向处理：先解码并通过 Harness 附件服务持久提交，再发布标准 Harness `image` 块，同时把轨迹和重放中的字节替换为小型持久标记。任何 data URL 都不会持久化。聊天附件不等于隐式修改工作区：要生成 `public/example.png` 或其他项目文件，Codex 仍须为明确的目标路径请求已声明的 Harness 修改工具。
 
-本包还包含浏览器插件。它以较低的 slot 优先级覆盖默认 Assistant 单元格，保留标准文本、推理、图片和通用回退展示，并使用 Harness 的紧凑 disclosure row 与状态点渲染 `codex-action` 块。图片组会委托给 rc.8 的 `conversation.message.images` slot；标准 Web profile 已组合其 `ui-attachment` owner，自定义 host 则须像默认 Assistant 渲染器一样组合该展示插件。折叠行显示解析后的动作、类别和阶段；展开后显示摘要、准确的协议事件、动作 ID，以及 Harness JSON tree 中的持久 JSON 记录。`thread/start` 会明确报告分层 prompt 所有权和发现的指令来源数量；它不会被标记为 Harness 工具或请求失败。浏览器插件还通过 DSH 原生 `settings.plugin.item` 扩展点贡献 Codex App Server 设置卡片，不修改 Models 或 Settings 核心包。
+本包还包含浏览器插件。它以较低的 slot 优先级覆盖默认 Assistant 单元格，保留标准文本、推理、图片和通用回退展示，并使用 Harness 的紧凑 disclosure row 与状态点渲染 `codex-action` 块。图片组会委托给当前的 `conversation.message.images` slot；标准 Web profile 已组合其 `ui-attachment` owner，自定义 host 则须像默认 Assistant 渲染器一样组合该展示插件。折叠行显示解析后的动作、类别和阶段；展开后显示摘要、准确的协议事件、动作 ID，以及 Harness JSON tree 中的持久 JSON 记录。`thread/start` 会明确报告分层 prompt 所有权和发现的指令来源数量；它不会被标记为 Harness 工具或请求失败。浏览器插件还通过 DSH 原生 `settings.plugin.item` 扩展点贡献 Codex App Server 设置卡片，不修改 Models 或 Settings 核心包。
 
 `thread/start` 块用于披露提供方生命周期，并不表示模型执行了原生动作。由 Codex 添加、且不属于注入的 Harness 历史记录的 developer、system 和 user 消息会显示为 `context/injected` 报告。它们会被记录以供审计，但不会在下一个无状态请求中作为 Harness 编写的历史内容再次提交。
 
@@ -35,6 +35,8 @@ Harness 用户图片和含图片的工具结果在消息、重放与缓存身份
 辅助工作跟随发起 Agent 的 provider，不会暗中切换账户。`compaction-basic` 未显式指定摘要路由时，会通过一次性进程使用当前选中的 Codex 模型，并且只有自然完成的文本才会成为持久 Harness checkpoint。Codex Agent 的 `web_search` 会在配置的 Web provider 之前被条件接管：每个 query 都在独立的一次性 App Server 进程中执行原生实时搜索，URL citation 再经原有 Harness 工具输出约定投影；非 Codex Agent 则原样委托给既有 provider chain。搜索不能复用主进程，因为该线程正在等待 Harness 工具结果。
 
 ## 安装
+
+此版本面向 DSH `>=0.1.2-alpha.1 <0.2.0`。浏览器清单会在 DSH 的信息性客户端依赖图中声明当前的 `ui-chat` slot owner 与 renderer，不再列出已移除的 `dsh-client-runtime` 模块。
 
 先完成一次原生 CLI 登录：
 

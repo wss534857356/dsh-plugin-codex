@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import { CallId, MessageId } from '@deepseek-ai/dsh-llm'
+import { MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import {
   AppServerEventMapper,
@@ -92,7 +92,7 @@ describe('App Server protocol translation', () => {
   })
 
   it('encodes nested image-bearing tool results as ordered structured output', () => {
-    const callId = CallId('call-images')
+    const callId = ToolCallId('call-images')
     const history = appServerHistory(options({
       messages: [{
         id: MessageId('tool-images'),
@@ -105,7 +105,7 @@ describe('App Server protocol translation', () => {
             { type: 'text', text: 'before' },
             {
               type: 'tool-result',
-              toolCallId: CallId('nested-call'),
+              toolCallId: ToolCallId('nested-call'),
               content: [
                 { type: 'image', attachment: image },
                 { type: 'text', text: 'inside' },
@@ -142,7 +142,7 @@ describe('App Server protocol translation', () => {
   })
 
   it('matches pending callbacks against the exact budgeted tool output', () => {
-    const callId = CallId('call-budgeted-image')
+    const callId = ToolCallId('call-budgeted-image')
     const request = options({
       messages: [{
         id: MessageId('tool-budgeted-image'),
@@ -185,7 +185,7 @@ describe('App Server protocol translation', () => {
   )
 
   it('preserves ordered Harness messages, tool calls, and tool results', () => {
-    const callId = CallId('call-1')
+    const callId = ToolCallId('call-1')
     const history = appServerHistory(options({
       messages: [
         {
@@ -246,7 +246,7 @@ describe('App Server protocol translation', () => {
   })
 
   it('reconstructs logged Harness skill calls through the labeled App Server alias', () => {
-    const callId = CallId('call-skill-1')
+    const callId = ToolCallId('call-skill-1')
     expect(appServerHistory(options({
       messages: [{
         id: MessageId('assistant-skill'),
@@ -407,7 +407,7 @@ describe('App Server protocol translation', () => {
   })
 
   it('coalesces cumulative replay snapshots while preserving Harness results', () => {
-    const callId = CallId('call-1')
+    const callId = ToolCallId('call-1')
     const firstReasoning = {
       type: 'reasoning',
       id: 'reasoning-1',
@@ -501,8 +501,8 @@ describe('App Server protocol translation', () => {
   })
 
   it('extracts exact successful and failed Harness tool outcomes', () => {
-    const first = CallId('call-1')
-    const second = CallId('call-2')
+    const first = ToolCallId('call-1')
+    const second = ToolCallId('call-2')
     expect(appServerToolResults(options({
       messages: [{
         id: MessageId('tool-results'),

@@ -9,7 +9,7 @@ import type {
   SaveImageAttachment,
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
-import { LlmError, OFFLOADED_IMAGE_TEXT } from '@deepseek-ai/dsh-llm'
+import { LlmError, offloadedImageText } from '@deepseek-ai/dsh-llm'
 import type {
   CodexAppServerEvent,
   CodexAppServerHydratedToolResult,
@@ -208,6 +208,7 @@ function collectModelImageLengths(item: JsonValue, label: string, lengths: numbe
 function replaceOldestModelImages(
   item: JsonValue,
   remaining: { count: number },
+  label: string,
 ): JsonValue {
   if (item === null || typeof item !== 'object' || Array.isArray(item)) return item
   const field = item.type === 'message' && Array.isArray(item.content)
@@ -228,7 +229,8 @@ function replaceOldestModelImages(
     if (replace) {
       remaining.count -= 1
       next ??= values.slice(0, index)
-      next.push({ type: 'input_text', text: OFFLOADED_IMAGE_TEXT })
+      const ref = markerReference(value.image_url, `${label}[${index}].image_url`)
+      next.push({ type: 'input_text', text: offloadedImageText(ref) })
     } else {
       next?.push(value)
     }
@@ -266,7 +268,8 @@ export function boundRequestImageHistory(
   }
   if (count === 0) return [...history]
   const remaining = { count }
-  return history.map(item => replaceOldestModelImages(item, remaining))
+  return history.map((item, index) =>
+    replaceOldestModelImages(item, remaining, `history[${index}]`))
 }
 
 /**

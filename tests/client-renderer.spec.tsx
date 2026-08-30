@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Context } from '@deepseek-ai/cordis'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import type { AssistantBlock } from '@deepseek-ai/dsh-client-runtime/client'
+import type { AssistantBlock } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { describe, expect, it, vi } from 'vitest'
 import type { CodexActionBlock } from '../src/protocol.ts'
@@ -154,6 +154,22 @@ describe('Codex Assistant renderer', () => {
       />,
     )
     expect(genericHtml).toContain('未知内容块')
+  })
+
+  it('supplies the current Markdown chrome labels', () => {
+    const html = renderToStaticMarkup(
+      <CodexAssistantBody
+        blocks={[{
+          kind: 'text',
+          text: '```ts\nconst value = 1\n```\n\n引用[^1]\n\n[^1]: 说明',
+        }]}
+        streaming={false}
+        renderMessageImages={renderMessageImages}
+        t={t}
+      />,
+    )
+    expect(html).toContain('复制')
+    expect(html).toContain('脚注')
   })
 
   it('routes consecutive images through the attachment presentation slot', () => {

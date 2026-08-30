@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import { CallId, MessageId, OFFLOADED_IMAGE_TEXT, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { MessageId, ReasoningEffortId, ToolCallId, offloadedImageText } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { CodexAppServerAdapter } from '../src/adapter.ts'
@@ -439,7 +439,7 @@ describe('CodexAppServerAdapter', () => {
       type: 'message',
       role: 'user',
       content: [
-        { type: 'input_text', text: OFFLOADED_IMAGE_TEXT },
+        { type: 'input_text', text: offloadedImageText(first) },
         { type: 'input_image', image_url: `data:image/png;base64,${INPUT_PNG_BASE64}` },
       ],
     }])
@@ -794,7 +794,7 @@ describe('CodexAppServerAdapter', () => {
       type: 'usage',
       usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 80 },
     })
-    const callId = CallId('call-1')
+    const callId = ToolCallId('call-1')
     const firstAnswer: Message = {
       id: MessageId('assistant-1'),
       role: 'assistant',

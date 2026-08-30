@@ -1,10 +1,10 @@
 /** Staged browser form over the Codex capability settings namespace. */
 
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type {
   SettingsScope,
   SettingsScopeSnapshot,
-  SnapshotStore,
-} from '@deepseek-ai/dsh-client-runtime/client'
+} from '@deepseek-ai/dsh-client-ui-settings/client'
 
 /** Duplicated intentionally: browser bundles must not import the Host module. */
 export const CODEX_SETTINGS_NAMESPACE = 'llm-codex-app-server'
@@ -27,7 +27,7 @@ const DEFAULTS: Required<CodexCapabilitySettingsView> = {
   webSearchMaxResults: 8,
 }
 
-/** Small client-safe store; importing the runtime bundle itself would execute its browser loader in SSR tests. */
+/** Controller-owned store for staged settings state. */
 class SnapshotCell<T> implements SnapshotStore<T> {
   private readonly listeners = new Set<() => void>()
 

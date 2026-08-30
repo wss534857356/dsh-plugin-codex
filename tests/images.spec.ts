@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { OFFLOADED_IMAGE_TEXT } from '@deepseek-ai/dsh-llm'
+import { offloadedImageText } from '@deepseek-ai/dsh-llm'
 import {
   NativeImageBridge,
   boundRequestImageHistory,
@@ -221,7 +221,7 @@ describe('NativeImageBridge', () => {
     }))
     const bounded = boundRequestImageHistory(history, 8)
     expect(bounded).toEqual([
-      { type: 'message', role: 'user', content: [{ type: 'input_text', text: OFFLOADED_IMAGE_TEXT }] },
+      { type: 'message', role: 'user', content: [{ type: 'input_text', text: offloadedImageText(refs[0]!) }] },
       history[1],
       history[2],
     ])

@@ -1,7 +1,7 @@
 /** App Server history, event, and Harness stream translation. */
 
 import {
-  CallId,
+  ToolCallId,
   CONTEXT_WINDOW_EXCEEDED_CODE,
   LlmError,
   QUOTA_EXCEEDED_CODE,
@@ -62,7 +62,7 @@ export interface CodexReplayState {
 
 /** Validated Harness dynamic-tool call decoded from an App Server callback. */
 export interface HarnessToolCall {
-  readonly id: CallId
+  readonly id: ToolCallId
   readonly name: string
   readonly arguments: string
 }
@@ -545,7 +545,7 @@ export function harnessToolCall(
     throw new LlmError('Codex requested a skill outside the current Harness session catalog', 'UNKNOWN_TOOL')
   }
   return {
-    id: CallId(params.callId),
+    id: ToolCallId(params.callId),
     name: originalName,
     arguments: JSON.stringify(params.arguments),
   }
