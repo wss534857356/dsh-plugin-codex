@@ -52,9 +52,13 @@ dsh --profile web --dump-config
 dsh --profile web
 ```
 
-To build and pack this checkout instead:
+To build and pack this checkout instead, first check out `deepseek-ai/deepseek-harness` at `cd5ef8148158c3a752a658978873241fdf8e2bbc` beside this repository as `../deepseek-harness`, then prepare its linked packages:
 
 ```sh
+cd ../deepseek-harness
+pnpm install --frozen-lockfile
+pnpm run build:lib
+cd ../harness-plugin
 pnpm install --frozen-lockfile
 pnpm run check
 ```

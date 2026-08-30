@@ -52,9 +52,13 @@ dsh --profile web --dump-config
 dsh --profile web
 ```
 
-若要改为构建当前工作副本并打包：
+若要改为构建当前工作副本并打包，请先把 `deepseek-ai/deepseek-harness` 的 `cd5ef8148158c3a752a658978873241fdf8e2bbc` revision 检出到本仓库旁的 `../deepseek-harness`，并准备这些链接包：
 
 ```sh
+cd ../deepseek-harness
+pnpm install --frozen-lockfile
+pnpm run build:lib
+cd ../harness-plugin
 pnpm install --frozen-lockfile
 pnpm run check
 ```

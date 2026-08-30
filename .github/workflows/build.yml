@@ -17,6 +17,9 @@ jobs:
   verify:
     name: ${{ matrix.os }} / Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: harness-plugin
     strategy:
       fail-fast: false
       matrix:
@@ -28,7 +31,16 @@ jobs:
           - os: windows-latest
             node: '24.x'
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout plugin
+        uses: actions/checkout@v6
+        with:
+          path: harness-plugin
+      - name: Checkout compatible DSH source
+        uses: actions/checkout@v6
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: cd5ef8148158c3a752a658978873241fdf8e2bbc
+          path: deepseek-harness
       - uses: pnpm/action-setup@v4
         with:
           version: 11.7.0
@@ -37,6 +49,14 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
+          cache-dependency-path: |
+            harness-plugin/pnpm-lock.yaml
+            deepseek-harness/pnpm-lock.yaml
+      - name: Prepare compatible DSH packages
+        working-directory: deepseek-harness
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build:lib
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
       - name: Upload npm package
@@ -44,6 +64,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: npm-package-${{ github.sha }}
-          path: dist/*.tgz
+          path: harness-plugin/dist/*.tgz
           if-no-files-found: error
           retention-days: 14
