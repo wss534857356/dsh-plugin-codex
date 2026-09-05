@@ -18,6 +18,8 @@ import type {
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { SubprocessHandle } from '@deepseek-ai/dsh-subprocess'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as CodexAppServer from '../src/index.ts'
 
 const PROVIDER = 'codex-local'
@@ -113,6 +115,8 @@ describe('real locally authenticated Codex bridge', () => {
     contexts.push(ctx)
     await ctx.plugin(LlmRuntime)
     await ctx.plugin(LocalSubprocessRuntime)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
     const readImage = vi.fn(async (ref: typeof IMAGE_REF) => ({ ref, data: IMAGE_DATA }))
     ctx.provide('attachments', {
       imageLimits: {

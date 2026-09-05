@@ -18,7 +18,7 @@ This differs from Harness's built-in `@deepseek-ai/dsh-subagent-codex`. The buil
 
 ## How it works
 
-An ordinary Harness conversation session reuses one pinned `@openai/codex@0.147.0` App Server in a private empty directory and one ephemeral thread while its bounded cache lease remains valid. The process uses the native Codex account state under `CODEX_HOME`; the plugin never reads, copies, logs, or stores OAuth tokens or API keys. Requests without a session id and auxiliary requests remain one-shot.
+An ordinary Harness conversation session reuses one pinned `@openai/codex@0.153.3` App Server in a private empty directory and one ephemeral thread while its bounded cache lease remains valid. The process uses the native Codex account state under `CODEX_HOME`; the plugin never reads, copies, logs, or stores OAuth tokens or API keys. Requests without a session id and auxiliary requests remain one-shot.
 
 The adapter supplies the Harness system text as App Server base instructions, reconstructs cold threads by injecting all logged Harness messages before an empty turn, declares Harness tools under the `deepseek_harness` App Server namespace, and sends later ordinary user messages through native turn input. When one DSH step appends several inbox messages, the first starts the turn and the rest enter that same turn through ordered `turn/steer` requests. The outer Harness `skill` tool is exposed there as `harness_skill`; its argument schema accepts only names from the current Harness session catalog, while Codex-native skills stay on Codex's own loader. A warm thread is reused only when the complete request is an append-only continuation the adapter can reproduce; otherwise it is discarded and rebuilt. App Server still adds Codex-owned instructions and tools. This is deliberately a layered provider, not a raw-model transport or a claim that Harness replaces the Codex prompt.
 
@@ -36,7 +36,7 @@ Auxiliary work follows the initiating Agent's provider instead of silently switc
 
 ## Install
 
-This release targets DSH `>=0.1.2-alpha.1 <0.2.0`. Its browser manifest declares the current `ui-chat` slot owner and renderer in DSH's informational client graph; the removed `dsh-client-runtime` module is not part of that roster.
+This release targets DSH `>=0.1.3-alpha.1 <0.2.0`. Its browser manifest declares the current `ui-chat` slot owner and renderer in DSH's informational client graph; the removed `dsh-client-runtime` module is not part of that roster.
 
 Authenticate the native CLI once:
 
@@ -71,7 +71,7 @@ dsh --profile web --dump-config
 dsh --profile web
 ```
 
-The bundle registers provider `codex-local` and every model shown by the pinned App Server's default picker: `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark`. Select one in the Models UI. Installation does not replace the profile's default model automatically. App Server routes marked as hidden are not added to the selector.
+The bundle registers provider `codex-local` and every model shown by the pinned App Server's default picker: `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark`. Select one in the Models UI. Installation does not replace the profile's default model automatically. App Server routes marked as hidden are not added to the selector.
 
 Harness profiles set `autoInstallPeers: false`, so installation may report missing peer dependencies. At boot, the profile module fallback supplies those peers from the current Harness installation so the plugin shares its Cordis and service instances.
 
@@ -100,13 +100,13 @@ Later profile patch layers can replace the `llm-codex-app-server` row. A replace
 | `provider` | `codex-local` | Harness provider route. |
 | `displayName` | `Codex (local login)` | Selector label. |
 | `modelProvider` | `openai` | Codex App Server model-provider id. |
-| `models` | Seven visible App Server catalog entries | Advisory model metadata, input modalities, and reasoning choices. The shipped snapshot declares image input for the six routes observed with it and text-only for Spark; omitted/custom modalities default to text-only. Unlisted safe model ids remain routable as text-only. |
+| `models` | Eight visible App Server catalog entries | Advisory model metadata, input modalities, and reasoning choices. The shipped snapshot declares image input for seven routes and text-only for Spark; omitted/custom modalities default to text-only. Unlisted safe model ids remain routable as text-only. |
 | `timeoutMs` | `300000` | Wall-clock limit for one App Server turn. |
 | `disposeGraceMs` | `3000` | Process-tree termination grace. |
 | `maxJsonRpcLineBytes` | `8388608` | Maximum bytes accepted from App Server stdout for one newline-delimited JSON-RPC message. Parsed messages do not count toward a cumulative stdout limit. |
 | `maxRequestImageBytes` | `20971520` | Maximum projected base64 image payload hydrated into one model request; oldest model-visible images become deterministic omission text first. |
 | `maxStderrBytes` | `65536` | Maximum retained diagnostic output. |
-| `maxRetries` | `0` | Harness-visible retries for transient process or provider failures. |
+| `maxRetries` | `1` | Harness-visible retries for transient process or provider failures. A model-capacity rejection waits five minutes, then retries the original model without rerouting. |
 | `maxCachedSessions` | `8` | Maximum idle or tool-waiting session leases retained before least-recently-used eviction. Active requests may temporarily exceed it. |
 | `sessionIdleTimeoutMs` | `600000` | Idle lifetime of a cached App Server session thread. |
 | `imageGenerationEnabled` | `true` | Whether ordinary model turns enable native image generation in the pinned App Server. Compaction turns always keep it off. |
@@ -125,18 +125,18 @@ Example override:
     displayName: Codex (local login)
     modelProvider: openai
     models:
-      - id: gpt-5.6-sol
-        name: GPT-5.6-Sol
+      - id: gpt-6-astra
+        name: GPT-6-Astra
         contextWindow: 1050000
         inputModalities: [text, image]
         reasoningEfforts: [low, medium, high, xhigh, max, ultra]
-        defaultReasoningEffort: low
+        defaultReasoningEffort: medium
     timeoutMs: 600000
     disposeGraceMs: 3000
     maxJsonRpcLineBytes: 8388608
     maxRequestImageBytes: 20971520
     maxStderrBytes: 65536
-    maxRetries: 0
+    maxRetries: 1
     maxCachedSessions: 8
     sessionIdleTimeoutMs: 600000
     imageGenerationEnabled: true
@@ -149,16 +149,16 @@ Example override:
 
 ## Compatibility and limitations
 
-- The protocol baseline is Codex CLI `0.147.0`; the dependency and runtime handshake are pinned because the experimental App Server protocol is version-sensitive.
-- The default catalog exposes each model's full context window: `1050000` for GPT-5.4, GPT-5.5, and the GPT-5.6 family; `400000` for `gpt-5.4-mini`; and `128000` for `gpt-5.3-codex-spark`. The pinned App Server may report a smaller effective working window in usage notifications. A deployment that enforces that smaller limit can override model metadata; a provider-confirmed context overflow remains eligible for Harness compaction and retry.
-- The default model catalog is a dated `model/list` snapshot observed with App Server `0.147.0`: GPT-5.6 Sol/Terra/Luna, GPT-5.5, GPT-5.4, and GPT-5.4 Mini declared text+image input; GPT-5.3 Codex Spark declared text only. The server/account catalog may change independently of the package, so every Codex upgrade must re-probe it. Custom entries without `inputModalities` and unlisted ids remain text-only.
+- The protocol baseline is Codex CLI `0.153.3`; the dependency and runtime handshake are pinned because the experimental App Server protocol is version-sensitive.
+- The default catalog exposes each model's full context window: `1050000` for GPT-6 Astra, GPT-5.4, GPT-5.5, and the GPT-5.6 family; `400000` for `gpt-5.4-mini`; and `128000` for `gpt-5.3-codex-spark`. The pinned App Server may report a smaller effective working window in usage notifications. A deployment that enforces that smaller limit can override model metadata; a provider-confirmed context overflow remains eligible for Harness compaction and retry.
+- The default model catalog is a dated `model/list` snapshot observed on 2026-09-05 with App Server `0.153.3`: GPT-6 Astra, GPT-5.6 Sol/Terra/Luna, GPT-5.5, GPT-5.4, and GPT-5.4 Mini declared text+image input; GPT-5.3 Codex Spark declared text only. The server/account catalog may change independently of the package, so every Codex upgrade must re-probe it. Custom entries without `inputModalities` and unlisted ids remain text-only.
 - Codex co-owns the model-visible instructions and tool catalog. The keyless wire test records the extra permission, primary-agent, collaboration, environment, interaction, and code-mode layers that remain after supported thread overrides.
-- Code Mode remains enabled because `gpt-5.6-sol` uses it to dispatch App Server dynamic tools. Native image viewing stays enabled; image generation defaults on for ordinary turns but can be disabled in the plugin settings card, and remains off for compaction and search processes. This image-generation switch is a capability flag of the pinned App Server `0.147.0`, not a stable top-level Codex configuration key. Unrelated optional native integrations remain disabled.
+- Code Mode remains enabled because `gpt-5.6-sol` uses it to dispatch App Server dynamic tools. Native image viewing stays enabled; image generation defaults on for ordinary turns but can be disabled in the plugin settings card, and remains off for compaction and search processes. This image-generation switch is a capability flag of the pinned App Server `0.153.3`, not a stable top-level Codex configuration key. Unrelated optional native integrations remain disabled.
 - Image input, image-bearing tool results, and native generated images require the profile's durable `ctx.attachments` service. Image bytes are subject to its media, byte, count, aggregate-byte, pixel, and side-dimension limits and are never stored inline in messages, `codex-action` blocks, or replay state.
 - Native Codex actions may still occur. They run in a private empty working directory under a read-only sandbox with approvals set to `never`; their lifecycle snapshots are displayed as provider trajectory, and approval or interaction requests are safely declined unless the protocol can answer them without user authority.
 - Discovered instruction sources are shown in the `thread/start` lifecycle report. A non-empty report is disclosure, not a request failure. Codex-generated context that is absent from this list is reported separately as `context/injected`.
 - Models that affirmatively declare `image` accept ordered image-only or mixed text/image user prompts and image-bearing Harness tool results. Text-only, unavailable, custom-without-declaration, and uncatalogued routes reject image history before process startup.
-- `temperature` and `stop` are rejected because App Server `0.147.0` exposes no reliable equivalents. `maxTokens` is also rejected for ordinary and session-title requests. For `purpose: compaction` only, the adapter accepts it as an advisory Harness budget, removes live tool declarations, and waits for a naturally completed Codex summary; App Server cannot enforce the numerical cap.
+- `temperature` and `stop` are rejected because App Server `0.153.3` exposes no reliable equivalents. `maxTokens` is also rejected for ordinary and session-title requests. For `purpose: compaction` only, the adapter accepts it as an advisory Harness budget, removes live tool declarations, and waits for a naturally completed Codex summary; App Server cannot enforce the numerical cap.
 - App Server automatic compaction is configured at Harness's safe integer ceiling so the durable Harness summary replaces logged history first. Any native compaction item or notification still makes the live lease non-reusable and is never written into reconstructible replay state. Leave `compaction-basic.summarizationProvider` and `summarizationModel` unset to follow the Agent's selected Codex route.
 - A Codex-initiated `web_search` uses native live Codex search in isolated one-shot processes and returns only citeable HTTP(S) sources. It follows the initiating Agent's model unless the plugin card sets a search-only override. When takeover is disabled, and for every non-Codex Agent, the conditional around-dispatch listener calls `next()` unchanged, so installing the bundle neither removes nor duplicates the existing Web provider implementation.
 - `CODEX_INTERNAL_ORIGINATOR_OVERRIDE=deepseek-harness` identifies adapter requests; this internal compatibility point is reverified on Codex upgrades.

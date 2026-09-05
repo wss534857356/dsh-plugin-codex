@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { AssistantBlock } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
@@ -281,11 +281,43 @@ function ReasoningBlock({ text, running, t }: { text: string; running: boolean; 
   )
 }
 
+const NOOP = (): void => {}
+
+/** Keep inline process evidence mounted while the owning Turn disclosure is closed. */
+function ProcessBlock({ hidden, reveal = NOOP, children }: {
+  readonly hidden: boolean
+  readonly reveal?: (() => void) | undefined
+  readonly children: ReactNode
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const element = ref.current
+    if (element === null) return
+    if (hidden && element.contains(element.ownerDocument.activeElement)) {
+      reveal()
+      return
+    }
+    if (hidden) element.setAttribute('hidden', 'until-found')
+    else element.removeAttribute('hidden')
+  }, [hidden, reveal])
+  useEffect(() => {
+    const element = ref.current
+    if (element === null) return
+    element.addEventListener('beforematch', reveal)
+    return () => { element.removeEventListener('beforematch', reveal) }
+  }, [reveal])
+  return <div ref={ref} data-turn-process-inline={hidden || undefined}>{children}</div>
+}
+
 export interface CodexAssistantBodyProps {
   readonly blocks: readonly AssistantBlock[]
   readonly streaming: boolean
   readonly interrupted?: boolean | undefined
   readonly renderMessageImages: RenderMessageImages
+  /** Hide reasoning and Codex trajectory owned by the Turn-level process disclosure. */
+  readonly processHidden?: boolean | undefined
+  /** Reveal the owning Turn-level process disclosure, including for browser Find. */
+  readonly revealProcess?: (() => void) | undefined
   readonly mentions?: MarkdownFileMentions | undefined
   readonly t: CodexTranslate
 }
@@ -296,6 +328,8 @@ export const CodexAssistantBody = memo(function CodexAssistantBody({
   streaming,
   interrupted,
   renderMessageImages,
+  processHidden = false,
+  revealProcess,
   mentions,
   t,
 }: CodexAssistantBodyProps) {
@@ -336,7 +370,11 @@ export const CodexAssistantBody = memo(function CodexAssistantBody({
         )
         break
       case 'reasoning':
-        rendered.push(<ReasoningBlock key={index} text={block.text} running={streaming && index === last} t={t} />)
+        rendered.push(
+          <ProcessBlock key={index} hidden={processHidden} reveal={revealProcess}>
+            <ReasoningBlock text={block.text} running={streaming && index === last} t={t} />
+          </ProcessBlock>,
+        )
         break
       case 'image': {
         const start = index
@@ -361,23 +399,26 @@ export const CodexAssistantBody = memo(function CodexAssistantBody({
         break
       case 'other': {
         const action = codexActionView(block.block)
-        rendered.push(action !== undefined
-          ? (
+        if (action !== undefined) {
+          rendered.push(
+            <ProcessBlock key={index} hidden={processHidden} reveal={revealProcess}>
               <CodexActionRow
-                key={index}
                 active={streaming && !settledActionIds.has(action.actionId)}
                 action={action}
                 t={t}
               />
-            )
-          : (
-              <JsonBlock
-                key={index}
-                label={t('message.unknownBlock')}
-                payload={block.block}
-                truncatedLabel={total => t('json.truncated', { total })}
-              />
-            ))
+            </ProcessBlock>,
+          )
+        } else {
+          rendered.push(
+            <JsonBlock
+              key={index}
+              label={t('message.unknownBlock')}
+              payload={block.block}
+              truncatedLabel={total => t('json.truncated', { total })}
+            />,
+          )
+        }
         break
       }
     }
@@ -400,6 +441,7 @@ type CodexAssistantNodeViewProps =
 export const CodexAssistantNodeView = memo(function CodexAssistantNodeView({
   node,
   useTurnData,
+  turnProcess,
   openFile,
   renderMessageImages,
   fileMentions,
@@ -419,12 +461,19 @@ export const CodexAssistantNodeView = memo(function CodexAssistantNodeView({
     () => owner === undefined ? undefined : fileMentions(owner),
     [fileMentions, owner],
   )
+  const processHidden = turnProcess !== undefined
+    && turnProcess.foldable
+    && turnProcess.spec.answerStep === data.step
+    && !turnProcess.open
+  const revealProcess = useCallback(() => { turnProcess?.setOpen(true) }, [turnProcess])
   return (
     <CodexAssistantBody
       blocks={data.blocks}
       streaming={data.status === 'running'}
       interrupted={data.status === 'interrupted'}
       renderMessageImages={renderMessageImages}
+      processHidden={processHidden}
+      revealProcess={revealProcess}
       mentions={mentions}
       t={t}
     />

@@ -12,6 +12,11 @@
   gap: 16px;
 }
 
+/* Keep browser-Find-visible process evidence mounted without leaving a flex gap. */
+.body > [data-turn-process-inline][hidden] {
+  margin-bottom: -16px;
+}
+
 .stopped {
   align-self: flex-start;
   padding: 0 6px;

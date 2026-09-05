@@ -5,6 +5,10 @@ import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { CodexAppServerAdapter } from '../src/adapter.ts'
 import type { CodexImageStorePort } from '../src/images.ts'
+import {
+  CODEX_MODEL_CAPACITY_CODE,
+  CODEX_MODEL_CAPACITY_RETRY_AFTER_MS,
+} from '../src/protocol.ts'
 import type {
   CodexAppServerEvent,
   CodexAppServerRequest,
@@ -202,12 +206,16 @@ async function collect(instance: CodexAppServerAdapter, options: GenerateOptions
 }
 
 describe('CodexAppServerAdapter', () => {
-  it('advertises the provider, model, context, reasoning, and no retries', async () => {
+  it('advertises the provider, model, context, reasoning, and capacity backoff', async () => {
     const { adapter: instance } = adapter([])
     expect(instance.providerInfo('codex-local')).toEqual({ id: 'codex-local', name: 'Codex local' })
     expect(instance.providerRetryPolicy('codex-local')).toMatchObject({
       mode: 'normal',
       maxRetries: 0,
+      retryableCodes: expect.arrayContaining([CODEX_MODEL_CAPACITY_CODE]),
+      initialDelayMs: 1_000,
+      maxDelayMs: CODEX_MODEL_CAPACITY_RETRY_AFTER_MS,
+      jitterRatio: 0.1,
     })
     expect(await instance.listModels('codex-local')).toEqual([{
       provider: 'codex-local',

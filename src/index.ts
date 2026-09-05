@@ -3,10 +3,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { WebSearchResult, WebSearchSource } from '@deepseek-ai/dsh-web'
 import type { ModelModality } from '@deepseek-ai/dsh-llm'
-import { installSettingsSection } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { CodexAppServerAdapter } from './adapter.ts'
 import type { CodexModel } from './adapter.ts'
@@ -92,6 +92,15 @@ export interface Config extends CodexCapabilitySettings {
 const MODEL_MODALITIES = ['text', 'image'] as const
 
 const DEFAULT_MODELS = [
+  {
+    id: 'gpt-6-astra',
+    name: 'GPT-6-Astra',
+    description: 'Our most capable model for complex, demanding work.',
+    contextWindow: 1_050_000,
+    inputModalities: ['text', 'image'],
+    reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    defaultReasoningEffort: 'medium',
+  },
   {
     id: 'gpt-5.6-sol',
     name: 'GPT-5.6-Sol',
@@ -180,7 +189,7 @@ export const Config: z<Config> = z.object({
   maxJsonRpcLineBytes: z.number().step(1).min(1).default(DEFAULT_MAX_JSON_RPC_LINE_BYTES),
   maxRequestImageBytes: z.number().step(1).min(1).default(DEFAULT_MAX_REQUEST_IMAGE_BYTES),
   maxStderrBytes: z.number().step(1).min(1).default(64 * 1024),
-  maxRetries: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+  maxRetries: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER).default(1),
   maxCachedSessions: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(8),
   sessionIdleTimeoutMs: z.number().step(1).min(1).max(2_147_483_647).default(600_000),
   ...codexCapabilitySettingsFields,
@@ -215,7 +224,7 @@ function resolveConfig(config: Config): ResolvedConfig {
   const maxJsonRpcLineBytes = config.maxJsonRpcLineBytes ?? DEFAULT_MAX_JSON_RPC_LINE_BYTES
   const maxRequestImageBytes = config.maxRequestImageBytes ?? DEFAULT_MAX_REQUEST_IMAGE_BYTES
   const maxStderrBytes = config.maxStderrBytes ?? 64 * 1024
-  const maxRetries = config.maxRetries ?? 0
+  const maxRetries = config.maxRetries ?? 1
   const maxCachedSessions = config.maxCachedSessions ?? 8
   const sessionIdleTimeoutMs = config.sessionIdleTimeoutMs ?? 600_000
   const capabilities = resolveCodexCapabilitySettings(config)
@@ -416,18 +425,20 @@ export function apply(ctx: Context, config: Config): void {
   ctx.on('session/disposed', (session) => {
     void adapter.disposeSession(String(session.id)).catch(reportCleanupError)
   })
-  installSettingsSection(
-    ctx,
-    CODEX_SETTINGS_NAMESPACE,
-    CodexCapabilitySettingsSchema,
-    resolved.capabilities,
-    {
-      setSource: (source) => { capabilitySource = source },
-      // Operations resolve a fresh snapshot and cached threads include it in
-      // their epoch, so no registration-level fact needs rebuilding here.
-      onChange: () => {},
-      validate: (value) => { resolveCodexCapabilitySettings(value) },
-    },
-  )
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(
+      ctx,
+      CODEX_SETTINGS_NAMESPACE,
+      CodexCapabilitySettingsSchema,
+      resolved.capabilities,
+      {
+        setSource: (source) => { capabilitySource = source },
+        // Operations resolve a fresh snapshot and cached threads include it in
+        // their epoch, so no registration-level fact needs rebuilding here.
+        onChange: () => {},
+        validate: (value) => { resolveCodexCapabilitySettings(value) },
+      },
+    )
+  })
   ctx.effect(() => () => adapter.dispose(), 'llm-codex-app-server: dispose cached sessions')
 }

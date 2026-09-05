@@ -49,8 +49,14 @@ describe('plugin composition', () => {
       id: 'codex-local',
       name: 'Codex (local login)',
     })
+    expect(ctx.llm.providerRetryPolicy('codex-local')).toMatchObject({
+      mode: 'normal',
+      maxRetries: 1,
+      maxDelayMs: 300_000,
+    })
     const models = await ctx.llm.listModels('codex-local')
     expect(models.map(model => model.id)).toEqual([
+      'gpt-6-astra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',
@@ -60,6 +66,12 @@ describe('plugin composition', () => {
       'gpt-5.3-codex-spark',
     ])
     expect(models).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        provider: 'codex-local',
+        id: 'gpt-6-astra',
+        name: 'GPT-6-Astra',
+        inputModalities: ['text', 'image'],
+      }),
       expect.objectContaining({
         provider: 'codex-local',
         id: 'gpt-5.6-terra',
@@ -73,6 +85,11 @@ describe('plugin composition', () => {
         inputModalities: ['text'],
       }),
     ]))
+    await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-6-astra')).resolves.toMatchObject({
+      inputModalities: ['text', 'image'],
+      context: { contextWindow: 1_050_000 },
+      reasoning: { defaultEffort: 'medium' },
+    })
     await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-5.6-terra')).resolves.toMatchObject({
       inputModalities: ['text', 'image'],
       context: { contextWindow: 1_050_000 },

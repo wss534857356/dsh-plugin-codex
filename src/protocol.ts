@@ -22,6 +22,8 @@ import type { CodexAppServerEvent, JsonObject, JsonValue } from './wire.ts'
 
 const REPLAY_KIND = 'codex-app-server'
 const REPLAY_VERSION = 4
+export const CODEX_MODEL_CAPACITY_CODE = 'MODEL_CAPACITY'
+export const CODEX_MODEL_CAPACITY_RETRY_AFTER_MS = 5 * 60 * 1_000
 const HARNESS_SKILL_NAME = 'skill'
 const HARNESS_SKILL_TOOL_NAME = 'harness_skill'
 const NATIVE_COMPACTION_ITEM_TYPES = new Set([
@@ -1017,6 +1019,9 @@ export class AppServerEventMapper {
 
 /** Classify a Codex diagnostic into Harness's stable LLM failure taxonomy. */
 export function codexFailureCode(message: string): string {
+  if (/\b(?:selected|requested)?\s*model\b.*\bat capacity\b/is.test(message)) {
+    return CODEX_MODEL_CAPACITY_CODE
+  }
   if (/context(?:\s|_|-)*(?:window|length).*(?:exceed|overflow)|too (?:long|large).*context/is.test(message)) {
     return CONTEXT_WINDOW_EXCEEDED_CODE
   }
@@ -1047,5 +1052,8 @@ export function assertCompletedTurn(event: CodexAppServerEvent): void {
     : typeof object(turn.error, 'turn error').message === 'string'
       ? String(object(turn.error, 'turn error').message)
       : JSON.stringify(turn.error)
-  throw new LlmError(error, turn.status === 'interrupted' ? 'ABORTED' : codexFailureCode(error))
+  const code = turn.status === 'interrupted' ? 'ABORTED' : codexFailureCode(error)
+  throw new LlmError(error, code, code === CODEX_MODEL_CAPACITY_CODE
+    ? { providerRetryAfterMs: CODEX_MODEL_CAPACITY_RETRY_AFTER_MS }
+    : undefined)
 }

@@ -1,11 +1,10 @@
 /** User-editable Codex capability settings exposed through DSH settings. */
 
 import z from '@deepseek-ai/schemastery'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { SAFE_MODEL_ID } from './identifiers.ts'
 
 /** Settings address shared by the Host section and the browser card. */
-export const CODEX_SETTINGS_NAMESPACE = settingsNamespace('llm-codex-app-server')
+export const CODEX_SETTINGS_NAMESPACE = 'llm-codex-app-server'
 
 /** The focused capability subset that may change without reloading the provider. */
 export interface CodexCapabilitySettings {

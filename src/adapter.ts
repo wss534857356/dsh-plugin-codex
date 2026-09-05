@@ -22,6 +22,8 @@ import {
   AppServerEventMapper,
   appServerDynamicTools,
   appServerHistory,
+  CODEX_MODEL_CAPACITY_CODE,
+  CODEX_MODEL_CAPACITY_RETRY_AFTER_MS,
   appServerToolResults,
   assertCompletedTurn,
   extendAppServerHistory,
@@ -64,7 +66,13 @@ export interface CodexAdapterOptions {
   readonly runner: CodexAppServerRunnerPort
 }
 
-const RETRYABLE_CODES = Object.freeze(['RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'])
+const RETRYABLE_CODES = Object.freeze([
+  CODEX_MODEL_CAPACITY_CODE,
+  'RATE_LIMIT',
+  'SERVER',
+  'TIMEOUT',
+  'TRANSPORT',
+])
 
 function modelInfo(provider: string, model: CodexModel): LlmModelInfo {
   return {
@@ -100,7 +108,7 @@ export class CodexAppServerAdapter extends LlmAdapter {
       maxRetries: this.options.maxRetries,
       retryableCodes: RETRYABLE_CODES,
       initialDelayMs: 1_000,
-      maxDelayMs: 10_000,
+      maxDelayMs: CODEX_MODEL_CAPACITY_RETRY_AFTER_MS,
       jitterRatio: 0.1,
     }
   }

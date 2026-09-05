@@ -130,6 +130,25 @@ describe('Codex Assistant renderer', () => {
     expect(html).not.toContain('data-state="done"')
   })
 
+  it('marks inline reasoning and Codex trajectory for the Turn process disclosure', () => {
+    const html = renderToStaticMarkup(
+      <CodexAssistantBody
+        blocks={[
+          { kind: 'reasoning', text: '接收 Code Mode 结果' },
+          { kind: 'other', block: lifecycleBlock() },
+          { kind: 'text', text: '最终回复' },
+        ]}
+        streaming={false}
+        renderMessageImages={renderMessageImages}
+        processHidden
+        t={t}
+      />,
+    )
+    expect(html.match(/data-turn-process-inline="true"/gu)).toHaveLength(2)
+    expect(html).toContain('data-codex-action="thread/start"')
+    expect(html).toContain('最终回复')
+  })
+
   it('specializes codex-action while preserving the generic fallback', () => {
     const actionOnly: readonly AssistantBlock[] = [{ kind: 'other', block: lifecycleBlock() }]
     const actionHtml = renderToStaticMarkup(

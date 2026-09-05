@@ -8,6 +8,8 @@ import {
   appServerHistory,
   appServerToolResults,
   assertCompletedTurn,
+  CODEX_MODEL_CAPACITY_CODE,
+  CODEX_MODEL_CAPACITY_RETRY_AFTER_MS,
   codexFailureCode,
   extendAppServerHistory,
   harnessToolCall,
@@ -843,6 +845,21 @@ describe('App Server protocol translation', () => {
         turn: { id: 'turn-1', status: 'failed', error: { message: 'status 401 unauthorized' } },
       },
     })).toThrowError(expect.objectContaining({ code: 'AUTH' }))
+    expect(() => assertCompletedTurn({
+      ...completed,
+      params: {
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: 'Selected model is at capacity. Please try a different model.' },
+        },
+      },
+    })).toThrowError(expect.objectContaining({
+      code: CODEX_MODEL_CAPACITY_CODE,
+      failure: expect.objectContaining({
+        providerRetryAfterMs: CODEX_MODEL_CAPACITY_RETRY_AFTER_MS,
+      }),
+    }))
   })
 
   it.each([
@@ -850,6 +867,7 @@ describe('App Server protocol translation', () => {
     ['status 401 unauthorized', 'AUTH'],
     ['quota exceeded', 'QUOTA'],
     ['status 429 too many requests', 'RATE_LIMIT'],
+    ['Selected model is at capacity. Please try a different model.', CODEX_MODEL_CAPACITY_CODE],
     ['status 503 service unavailable', 'SERVER'],
     ['request timed out', 'TIMEOUT'],
     ['connection reset', 'TRANSPORT'],

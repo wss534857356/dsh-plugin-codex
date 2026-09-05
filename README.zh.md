@@ -18,7 +18,7 @@
 
 ## 工作方式
 
-在有界缓存租约有效期间，普通 Harness 会话会复用一个固定版本为 `@openai/codex@0.147.0`、运行于私有空目录中的 App Server 进程和一个临时线程。该进程使用 `CODEX_HOME` 下的原生 Codex 账户状态；插件不会读取、复制、记录或保存 OAuth token 与 API key。没有 Session ID 的请求和辅助请求仍使用一次性进程。
+在有界缓存租约有效期间，普通 Harness 会话会复用一个固定版本为 `@openai/codex@0.153.3`、运行于私有空目录中的 App Server 进程和一个临时线程。该进程使用 `CODEX_HOME` 下的原生 Codex 账户状态；插件不会读取、复制、记录或保存 OAuth token 与 API key。没有 Session ID 的请求和辅助请求仍使用一次性进程。
 
 适配器将 Harness 系统文本作为 App Server 的基础指令，通过在空 turn 开始前注入全部已记录的 Harness 消息来重建冷启动线程，在 App Server 的 `deepseek_harness` 命名空间下声明 Harness 工具，并通过原生 turn input 发送后续普通用户消息。当一个 DSH step 追加多条 inbox 消息时，第一条启动 turn，其余消息通过有序的 `turn/steer` 请求进入同一 turn。外层 Harness 的 `skill` 工具在该命名空间内映射为 `harness_skill`；其参数 schema 只接受当前 Harness Session 目录中的名称，而 Codex 原生 skill 仍由 Codex 自己的 loader 管理。只有完整请求是适配器可重现的仅追加续接时才会复用热线程，否则会丢弃并重建线程。App Server 仍会加入 Codex 自有的指令和工具。这是有意设计的分层提供方，不是原始模型传输层，也不声称 Harness 取代了 Codex prompt。
 
@@ -36,7 +36,7 @@ Harness 用户图片和含图片的工具结果在消息、重放与缓存身份
 
 ## 安装
 
-此版本面向 DSH `>=0.1.2-alpha.1 <0.2.0`。浏览器清单会在 DSH 的信息性客户端依赖图中声明当前的 `ui-chat` slot owner 与 renderer，不再列出已移除的 `dsh-client-runtime` 模块。
+此版本面向 DSH `>=0.1.3-alpha.1 <0.2.0`。浏览器清单会在 DSH 的信息性客户端依赖图中声明当前的 `ui-chat` slot owner 与 renderer，不再列出已移除的 `dsh-client-runtime` 模块。
 
 先完成一次原生 CLI 登录：
 
@@ -71,7 +71,7 @@ dsh --profile web --dump-config
 dsh --profile web
 ```
 
-该组合包注册 `codex-local` 提供方，以及固定版本 App Server 默认模型选择器中的所有模型：`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini` 和 `gpt-5.3-codex-spark`。请在 Models UI 中选择模型。安装不会自动替换 profile 的默认模型。标记为隐藏的 App Server 路由不会加入选择器。
+该组合包注册 `codex-local` 提供方，以及固定版本 App Server 默认模型选择器中的所有模型：`gpt-6-astra`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini` 和 `gpt-5.3-codex-spark`。请在 Models UI 中选择模型。安装不会自动替换 profile 的默认模型。标记为隐藏的 App Server 路由不会加入选择器。
 
 Harness profile 设置了 `autoInstallPeers: false`，因此安装时可能报告缺少 peer dependency。启动时，profile 的模块回退机制会从当前 Harness 安装中提供这些 peer，使插件共享相同的 Cordis 和服务实例。
 
@@ -100,13 +100,13 @@ dsh plugin --profile web remove dsh-llm-codex-app-server
 | `provider` | `codex-local` | Harness 提供方路由。 |
 | `displayName` | `Codex (local login)` | 选择器标签。 |
 | `modelProvider` | `openai` | Codex App Server 的模型提供方 ID。 |
-| `models` | 7 个可见的 App Server 目录项 | 建议模型元数据、输入模态和推理选项。内置快照为当时观测到的 6 个路由声明图片输入，Spark 仅文本；省略模态的自定义模型默认仅文本。未列出但符合安全格式的模型 ID 仍可按仅文本路由。 |
+| `models` | 8 个可见的 App Server 目录项 | 建议模型元数据、输入模态和推理选项。内置快照中的 7 个路由声明图片输入，Spark 仅文本；省略模态的自定义模型默认仅文本。未列出但符合安全格式的模型 ID 仍可按仅文本路由。 |
 | `timeoutMs` | `300000` | 单个 App Server turn 的实际运行时间上限。 |
 | `disposeGraceMs` | `3000` | 终止进程树时的宽限时间。 |
 | `maxJsonRpcLineBytes` | `8388608` | 从 App Server stdout 接受的单条换行分隔 JSON-RPC 消息最大字节数。成功解析的消息不会累计到 stdout 总量限制中。 |
 | `maxRequestImageBytes` | `20971520` | 单次模型请求允许临时恢复的预计 base64 图片负载上限；超限时优先把最旧的模型可见图片替换为确定性省略文本。 |
 | `maxStderrBytes` | `65536` | 保留诊断输出的最大字节数。 |
-| `maxRetries` | `0` | Harness 可见的临时进程或提供方错误重试次数。 |
+| `maxRetries` | `1` | Harness 可见的临时进程或提供方错误重试次数。模型满载时等待 5 分钟，再以原模型重试，不静默切换路由。 |
 | `maxCachedSessions` | `8` | 按最近最少使用策略驱逐前，可保留的最大空闲或等待工具结果的 Session 租约数。活跃请求可能暂时超过该值。 |
 | `sessionIdleTimeoutMs` | `600000` | 已缓存 App Server Session 线程的空闲存活时间。 |
 | `imageGenerationEnabled` | `true` | 普通模型 turn 是否为固定版本 App Server 开启原生 image generation。压缩 turn 始终关闭。 |
@@ -125,18 +125,18 @@ dsh plugin --profile web remove dsh-llm-codex-app-server
     displayName: Codex (local login)
     modelProvider: openai
     models:
-      - id: gpt-5.6-sol
-        name: GPT-5.6-Sol
+      - id: gpt-6-astra
+        name: GPT-6-Astra
         contextWindow: 1050000
         inputModalities: [text, image]
         reasoningEfforts: [low, medium, high, xhigh, max, ultra]
-        defaultReasoningEffort: low
+        defaultReasoningEffort: medium
     timeoutMs: 600000
     disposeGraceMs: 3000
     maxJsonRpcLineBytes: 8388608
     maxRequestImageBytes: 20971520
     maxStderrBytes: 65536
-    maxRetries: 0
+    maxRetries: 1
     maxCachedSessions: 8
     sessionIdleTimeoutMs: 600000
     imageGenerationEnabled: true
@@ -149,16 +149,16 @@ dsh plugin --profile web remove dsh-llm-codex-app-server
 
 ## 兼容性与限制
 
-- 协议基线为 Codex CLI `0.147.0`；由于实验性 App Server 协议对版本敏感，依赖和运行时握手均固定到该版本。
-- 默认目录展示每个模型的完整上下文窗口：GPT-5.4、GPT-5.5 和 GPT-5.6 系列为 `1050000`，`gpt-5.4-mini` 为 `400000`，`gpt-5.3-codex-spark` 为 `128000`。固定版本的 App Server 可能在用量通知中报告较小的有效工作窗口。部署环境若强制使用该较小限制，可以覆盖模型元数据；由提供方确认的上下文溢出仍可触发 Harness 压缩和重试。
-- 默认模型目录是 2026-08-20 使用 App Server `0.147.0` 观测到的 `model/list` 快照：GPT-5.6 Sol/Terra/Luna、GPT-5.5、GPT-5.4 和 GPT-5.4 Mini 声明文本+图片输入，GPT-5.3 Codex Spark 仅文本。服务端/账户目录可独立变化，因此每次升级 Codex 都必须重新探测。未声明 `inputModalities` 的自定义条目和未列出的模型 ID 仍按仅文本处理。
+- 协议基线为 Codex CLI `0.153.3`；由于实验性 App Server 协议对版本敏感，依赖和运行时握手均固定到该版本。
+- 默认目录展示每个模型的完整上下文窗口：GPT-6 Astra、GPT-5.4、GPT-5.5 和 GPT-5.6 系列为 `1050000`，`gpt-5.4-mini` 为 `400000`，`gpt-5.3-codex-spark` 为 `128000`。固定版本的 App Server 可能在用量通知中报告较小的有效工作窗口。部署环境若强制使用该较小限制，可以覆盖模型元数据；由提供方确认的上下文溢出仍可触发 Harness 压缩和重试。
+- 默认模型目录是 2026-09-05 使用 App Server `0.153.3` 观测到的 `model/list` 快照：GPT-6 Astra、GPT-5.6 Sol/Terra/Luna、GPT-5.5、GPT-5.4 和 GPT-5.4 Mini 声明文本+图片输入，GPT-5.3 Codex Spark 仅文本。服务端/账户目录可独立变化，因此每次升级 Codex 都必须重新探测。未声明 `inputModalities` 的自定义条目和未列出的模型 ID 仍按仅文本处理。
 - Codex 共同拥有模型可见指令和工具目录。无需密钥的协议测试记录了在应用受支持的线程覆盖配置后仍然存在的额外权限、主 agent、协作、环境、交互和 Code Mode 层。
-- Code Mode 保持启用，因为 `gpt-5.6-sol` 使用它分派 App Server 动态工具。原生图片查看保持启用；普通 turn 的 image generation 默认启用，但可在插件设置卡片关闭，压缩和搜索进程则始终关闭。该 image generation 开关属于固定 App Server `0.147.0` 的能力标志，并非 Codex 官方配置中承诺稳定的顶层键。其他无关的可选原生集成保持禁用。
+- Code Mode 保持启用，因为 `gpt-5.6-sol` 使用它分派 App Server 动态工具。原生图片查看保持启用；普通 turn 的 image generation 默认启用，但可在插件设置卡片关闭，压缩和搜索进程则始终关闭。该 image generation 开关属于固定 App Server `0.153.3` 的能力标志，并非 Codex 官方配置中承诺稳定的顶层键。其他无关的可选原生集成保持禁用。
 - 图片输入、含图片的工具结果和原生生成图片都需要 profile 提供持久 `ctx.attachments` 服务。图片字节受该服务的媒体类型、单图字节数、数量、总字节数、像素和单边尺寸限制约束，绝不会以内联形式存入消息、`codex-action` 块或重放状态。
 - Codex 原生动作仍可能发生。它们运行在私有空工作目录中，使用只读 sandbox，并将审批策略设为 `never`；其生命周期快照显示为提供方轨迹。除非协议可以在不使用用户权限的情况下回答，否则审批或交互请求会被安全拒绝。
 - `thread/start` 生命周期报告会显示发现的指令来源。非空报告属于信息披露，并不代表请求失败。不在该列表中的 Codex 生成上下文会单独显示为 `context/injected`。
 - 明确声明 `image` 的模型接受有序的纯图片或文本/图片混合用户提示，以及含图片的 Harness 工具结果。仅文本、不可用、未声明模态的自定义模型和未列出的路由会在进程启动前拒绝图片历史。
-- App Server `0.147.0` 没有公开可靠的对应选项，因此会拒绝 `temperature` 和 `stop`；普通请求与 Session 标题请求同样拒绝 `maxTokens`。只有 `purpose: compaction` 会把它接受为 Harness 的建议预算，移除实时工具声明，并等待 Codex 摘要自然完成；App Server 无法强制执行该数值上限。
+- App Server `0.153.3` 没有公开可靠的对应选项，因此会拒绝 `temperature` 和 `stop`；普通请求与 Session 标题请求同样拒绝 `maxTokens`。只有 `purpose: compaction` 会把它接受为 Harness 的建议预算，移除实时工具声明，并等待 Codex 摘要自然完成；App Server 无法强制执行该数值上限。
 - App Server 自动压缩阈值仍设为 Harness 的安全整数上限，使持久 Harness 摘要优先替换已记录历史。任何原生压缩 item 或通知仍会使实时租约不可复用，并且绝不会写入可重建的重放状态。不要设置 `compaction-basic.summarizationProvider` 与 `summarizationModel`，即可跟随 Agent 当前选择的 Codex 路由。
 - Codex 发起的 `web_search` 会在隔离的一次性进程中使用 Codex 原生实时搜索，并且只返回可引用的 HTTP(S) source。默认跟随发起 Agent 的模型，也可由卡片设置插件自己的搜索模型覆盖；关闭接管或遇到非 Codex Agent 时，around-dispatch listener 会原样调用 `next()`，因此安装本组合包既不会移除也不会复制原有 Web provider 实现。
 - `CODEX_INTERNAL_ORIGINATOR_OVERRIDE=deepseek-harness` 用于标识适配器请求；升级 Codex 时会重新验证这一内部兼容点。
