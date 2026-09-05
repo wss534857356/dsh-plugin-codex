@@ -26,22 +26,16 @@ pnpm run check
 npm publish --dry-run
 ```
 
-## 第一次发布到 npm
+## npm trusted publishing
 
-首次发布前 npm 上还没有这个包，因此暂时无法为它绑定 trusted publisher。npm 还要求维护者先为账户启用双重身份验证，才能建立 trusted publisher。需要通过 release 工作流引导一次：
+发布通过 npm trusted publishing 使用 GitHub OIDC 鉴权。npm 包设置必须授权：
 
-1. 为执行发布的 npm 账户启用双重身份验证。
-2. 创建一个具有 package 读写权限、开启 **Bypass 2FA** 且短期有效的 granular npm token。
-3. 在 GitHub 仓库中添加名为 `NPM_TOKEN` 的 Actions secret。
-4. 按下一节的步骤准备并推送第一个版本 tag。
-5. npm 包创建成功后，进入其 npm 设置，配置 trusted publisher：
-   - GitHub owner：`wss534857356`
-   - Repository：`dsh-plugin-codex`
-   - Workflow filename：`release.yml`
-   - Allowed action：`npm publish`
-6. 删除 GitHub 仓库中的 `NPM_TOKEN` secret，并撤销首发 token；后续发布将改用 GitHub OIDC 的短期凭证。
+- GitHub owner：`wss534857356`
+- Repository：`dsh-plugin-codex`
+- Workflow filename：`release.yml`
+- Allowed action：`npm publish`
 
-工作流刻意保留可选的 `NPM_TOKEN` 环境桥接，因此首发可以使用 secret，切换 OIDC 后无需再次修改仓库代码。
+发布步骤不能设置 `NODE_AUTH_TOKEN`。空 token 会选择 token 鉴权，阻止 npm 使用 GitHub OIDC 身份。
 
 ## 发布新版本
 

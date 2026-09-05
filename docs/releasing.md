@@ -26,22 +26,16 @@ To exercise the npm publish lifecycle without changing the registry:
 npm publish --dry-run
 ```
 
-## First npm publication
+## npm trusted publishing
 
-The package does not exist on npm until the first release, so npm trusted publishing cannot be attached to it yet. npm also requires account-level two-factor authentication before a maintainer can establish a trusted publisher. Bootstrap it once through the release workflow:
+Releases authenticate through npm trusted publishing with GitHub OIDC. The package's npm settings must authorize:
 
-1. Enable two-factor authentication on the publishing npm account.
-2. Create a short-lived granular npm token with package read/write permission and **Bypass 2FA** enabled.
-3. Add it to the GitHub repository as an Actions secret named `NPM_TOKEN`.
-4. Prepare and push the first version tag using the procedure below.
-5. After the package exists, open its npm settings and configure the trusted publisher with:
-   - GitHub owner: `wss534857356`
-   - Repository: `dsh-plugin-codex`
-   - Workflow filename: `release.yml`
-   - Allowed action: `npm publish`
-6. Remove the `NPM_TOKEN` repository secret and revoke the bootstrap token. Future releases authenticate with short-lived GitHub OIDC credentials.
+- GitHub owner: `wss534857356`
+- Repository: `dsh-plugin-codex`
+- Workflow filename: `release.yml`
+- Allowed action: `npm publish`
 
-The workflow deliberately keeps the optional `NPM_TOKEN` environment bridge so the first publication can use the secret and later publications can use OIDC without changing repository code.
+The publish step must not set `NODE_AUTH_TOKEN`. An empty token selects token authentication and prevents npm from using the GitHub OIDC identity.
 
 ## Cut a release
 

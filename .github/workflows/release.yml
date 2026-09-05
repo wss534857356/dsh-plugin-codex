@@ -62,8 +62,6 @@ jobs:
         run: pnpm run package:verify "$GITHUB_REF_NAME"
       - name: Publish exact tarball to npm
         run: npm publish "${{ steps.package.outputs.tarball }}" --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
