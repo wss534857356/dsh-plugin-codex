@@ -87,13 +87,13 @@ describe('Codex settings card controller', () => {
 
     face.editBoolean('imageGenerationEnabled', false)
     face.editBoolean('webSearchEnabled', false)
-    face.editText('webSearchModel', 'gpt-5.4-mini')
+    face.editText('webSearchModel', 'gpt-5.6-luna')
     face.editText('webSearchMaxResults', '4')
     expect(face.hooks.codexSettings.getSnapshot()).toMatchObject({
       dirty: true,
       invalid: false,
       imageGenerationEnabled: { value: false, overridden: true },
-      webSearchModel: { value: 'gpt-5.4-mini', overridden: true },
+      webSearchModel: { value: 'gpt-5.6-luna', overridden: true },
       webSearchMaxResults: { value: '4', overridden: true },
     })
 
@@ -104,7 +104,7 @@ describe('Codex settings card controller', () => {
     })
     expect(scope.setCalls).toHaveBeenCalledWith('imageGenerationEnabled', false)
     expect(scope.setCalls).toHaveBeenCalledWith('webSearchEnabled', false)
-    expect(scope.setCalls).toHaveBeenCalledWith('webSearchModel', 'gpt-5.4-mini')
+    expect(scope.setCalls).toHaveBeenCalledWith('webSearchModel', 'gpt-5.6-luna')
     expect(scope.setCalls).toHaveBeenCalledWith('webSearchMaxResults', 4)
   })
 

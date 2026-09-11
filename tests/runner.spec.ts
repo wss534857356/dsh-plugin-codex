@@ -62,7 +62,6 @@ function scriptedHandle(script: Script): SubprocessHandle {
     outcome.resolve({ exitCode: 0, signal: null })
   })
   return {
-    pid: 123,
     stdin,
     stdout,
     stderr: undefined,

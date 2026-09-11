@@ -61,8 +61,6 @@ describe('plugin composition', () => {
       'gpt-5.6-terra',
       'gpt-5.6-luna',
       'gpt-5.5',
-      'gpt-5.4',
-      'gpt-5.4-mini',
       'gpt-5.3-codex-spark',
     ])
     expect(models).toEqual(expect.arrayContaining([
@@ -87,16 +85,12 @@ describe('plugin composition', () => {
     ]))
     await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-6-astra')).resolves.toMatchObject({
       inputModalities: ['text', 'image'],
-      context: { contextWindow: 1_050_000 },
+      context: { contextWindow: 272_000 },
       reasoning: { defaultEffort: 'medium' },
     })
     await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-5.6-terra')).resolves.toMatchObject({
       inputModalities: ['text', 'image'],
-      context: { contextWindow: 1_050_000 },
-      reasoning: { defaultEffort: 'medium' },
-    })
-    await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-5.4-mini')).resolves.toMatchObject({
-      context: { contextWindow: 400_000 },
+      context: { contextWindow: 272_000 },
       reasoning: { defaultEffort: 'medium' },
     })
     await expect(ctx.llm.resolveModelInfo('codex-local', 'gpt-5.3-codex-spark')).resolves.toMatchObject({
@@ -180,7 +174,7 @@ describe('plugin composition', () => {
     await ctx.settings.update(CodexAppServer.CODEX_SETTINGS_NAMESPACE, {
       imageGenerationEnabled: false,
       webSearchEnabled: false,
-      webSearchModel: 'gpt-5.4-mini',
+      webSearchModel: 'gpt-5.6-luna',
       webSearchMaxResults: 3,
     })
 
