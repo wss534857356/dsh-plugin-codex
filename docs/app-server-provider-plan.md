@@ -28,7 +28,7 @@ Each Harness model request gets one managed App Server subprocess and one epheme
    - `personality` set to `none`;
    - no collaboration mode;
    - dynamic tools derived from Harness tool schemas under the Harness namespace, with the Harness skill loader mapped and bounded to its logged session catalog;
-   - sandbox policy resolved by App Server from the effective Codex configuration, with approvals set to `never`.
+   - read-only, never-approve execution policy as defense in depth.
 4. Emit a lifecycle-category `thread/start` report containing the returned `instructionSources`; a non-empty report is disclosure, not failure and the report is not classified as a model action.
 5. Inject all user, assistant, tool-call, and tool-result history as native protocol items derived from the Harness request, then start an empty turn because the current user message is already in that logged history.
 6. Map reasoning summary and assistant-message deltas directly to indexed Harness blocks; classify raw input echoes, Codex-owned context, and new provider outputs before producing replay state or trajectory.
