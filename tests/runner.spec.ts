@@ -217,7 +217,6 @@ describe('Codex App Server runner', () => {
     expect(messages.find(message => message.method === 'thread/start')).toMatchObject({
       params: {
         approvalPolicy: 'never',
-        sandbox: 'read-only',
         baseInstructions: 'Harness system',
         developerInstructions: '',
         dynamicTools: [],
@@ -225,6 +224,7 @@ describe('Codex App Server runner', () => {
         experimentalRawEvents: true,
       },
     })
+    expect(object(messages.find(message => message.method === 'thread/start')?.params)).not.toHaveProperty('sandbox')
     expect(messages.find(message => message.method === 'thread/inject_items')).toMatchObject({
       params: { threadId: 'thread-1', items: request().history },
     })

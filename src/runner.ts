@@ -373,7 +373,6 @@ export class CodexAppServerRunner implements CodexAppServerRunnerPort {
         modelProvider: request.modelProvider,
         cwd: workdir,
         approvalPolicy: 'never',
-        sandbox: 'read-only',
         baseInstructions: request.system,
         developerInstructions: '',
         personality: 'none',

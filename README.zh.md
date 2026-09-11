@@ -150,13 +150,13 @@ dsh plugin --profile web remove dsh-llm-codex-app-server
 ## 兼容性与限制
 
 - 协议基线为 Codex CLI `0.154.0`；由于实验性 App Server 协议对版本敏感，依赖和运行时握手均固定到该版本。
-- App Server 以 `--strict-config` 启动，`CODEX_HOME` 中只能保留 Codex `0.154.0` 接受的配置键。诸如已移除的 `network_access` 旧键会让进程在 `initialize` 前退出；请更新原生配置，或通过 `env.CODEX_HOME` 指向一个配置兼容且已登录的 Codex home。
+- App Server 默认使用 `~/.codex`，也可通过 `CODEX_HOME` 指定目录。它以 `--strict-config` 启动，所选目录中须使用 Codex `0.154.0` 接受的配置键。启动前移除旧的顶层 `network_access = "enabled"` 行；`danger-full-access` 本身允许联网，`workspace-write` 则支持 `[sandbox_workspace_write]` 下的布尔值 `network_access`。
 - 静态目录保留本机 Codex 元数据中的上下文窗口：GPT-6 Astra、GPT-5.6 Sol/Terra/Luna 和 GPT-5.5 为 `272000`，GPT-5.3 Codex Spark 为 `128000`。Codex `0.154.0` 的 `model/list` 响应不提供 `contextWindow` 字段，因此这些值仍是可覆盖的显式部署元数据。由提供方确认的上下文溢出仍可触发 Harness 压缩和重试。
 - 默认模型目录是 2026-09-12 使用 App Server `0.154.0` 观测到的 `model/list` 快照：GPT-6 Astra、GPT-5.6 Sol/Terra/Luna 和 GPT-5.5 声明文本+图片输入，GPT-5.3 Codex Spark 仅文本。服务端/账户目录可独立变化，因此每次升级 Codex 都必须重新探测。未声明 `inputModalities` 的自定义条目和未列出的模型 ID 仍按仅文本处理。
 - Codex 共同拥有模型可见指令和工具目录。无需密钥的协议测试记录了在应用受支持的线程覆盖配置后仍然存在的额外权限、主 agent、协作、环境、交互和 Code Mode 层。
 - Code Mode 保持启用，因为 `gpt-5.6-sol` 使用它分派 App Server 动态工具。原生图片查看保持启用；普通 turn 的 image generation 默认启用，但可在插件设置卡片关闭，压缩和搜索进程则始终关闭。该 image generation 开关属于固定 App Server `0.154.0` 的能力标志，并非 Codex 官方配置中承诺稳定的顶层键。其他无关的可选原生集成保持禁用。
 - 图片输入、含图片的工具结果和原生生成图片都需要 profile 提供持久 `ctx.attachments` 服务。图片字节受该服务的媒体类型、单图字节数、数量、总字节数、像素和单边尺寸限制约束，绝不会以内联形式存入消息、`codex-action` 块或重放状态。
-- Codex 原生动作仍可能发生。它们运行在私有空工作目录中，使用只读 sandbox，并将审批策略设为 `never`；其生命周期快照显示为提供方轨迹。除非协议可以在不使用用户权限的情况下回答，否则审批或交互请求会被安全拒绝。
+- Codex 原生动作仍可能发生。它们运行在私有空工作目录中，沙箱模式遵循 Codex 的有效配置，审批策略设为 `never`；其生命周期快照显示为提供方轨迹。除非协议可以在不使用用户权限的情况下回答，否则审批或交互请求会被安全拒绝。
 - `thread/start` 生命周期报告会显示发现的指令来源。非空报告属于信息披露，并不代表请求失败。不在该列表中的 Codex 生成上下文会单独显示为 `context/injected`。
 - 明确声明 `image` 的模型接受有序的纯图片或文本/图片混合用户提示，以及含图片的 Harness 工具结果。仅文本、不可用、未声明模态的自定义模型和未列出的路由会在进程启动前拒绝图片历史。
 - App Server `0.154.0` 没有公开可靠的对应选项，因此会拒绝 `temperature` 和 `stop`；普通请求与 Session 标题请求同样拒绝 `maxTokens`。只有 `purpose: compaction` 会把它接受为 Harness 的建议预算，移除实时工具声明，并等待 Codex 摘要自然完成；App Server 无法强制执行该数值上限。
