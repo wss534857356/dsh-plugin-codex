@@ -11,12 +11,12 @@ allowBuilds:
   rolldown: true
 
 minimumReleaseAgeExclude:
-  - '@openai/codex@0.153.3||0.153.3-darwin-arm64||0.153.3-darwin-x64||0.153.3-linux-arm64||0.153.3-linux-x64||0.153.3-win32-arm64||0.153.3-win32-x64'
-  - '@deepseek-ai/cordis@4.0.1'
-  - '@deepseek-ai/cosmokit@1.8.2'
-  - '@deepseek-ai/schemastery@3.18.1'
-  - '@deepseek-ai/cordis-plugin-include@1.0.6'
-  - '@deepseek-ai/cordis-plugin-loader@1.0.2'
+  - '@openai/codex@0.154.0||0.154.0-darwin-arm64||0.154.0-darwin-x64||0.154.0-linux-arm64||0.154.0-linux-x64||0.154.0-win32-arm64||0.154.0-win32-x64'
+  - '@deepseek-ai/cordis@4.0.2'
+  - '@deepseek-ai/cosmokit@1.8.3'
+  - '@deepseek-ai/schemastery@3.18.2'
+  - '@deepseek-ai/cordis-plugin-include@1.0.7'
+  - '@deepseek-ai/cordis-plugin-loader@1.0.3'
 
 overrides:
   '@deepseek-ai/cordis': link:../deepseek-harness/vendor/cordis

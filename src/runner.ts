@@ -24,7 +24,7 @@ import type {
 
 export type { CodexAppServerEvent, JsonValue } from './wire.ts'
 
-export const CODEX_APP_SERVER_VERSION = '0.153.3'
+export const CODEX_APP_SERVER_VERSION = '0.154.0'
 
 const WORKDIR_PREFIX = 'dsh-codex-app-server-'
 const HARNESS_COMPACTION_THRESHOLD = Number.MAX_SAFE_INTEGER
@@ -373,7 +373,6 @@ export class CodexAppServerRunner implements CodexAppServerRunnerPort {
         modelProvider: request.modelProvider,
         cwd: workdir,
         approvalPolicy: 'never',
-        sandbox: 'read-only',
         baseInstructions: request.system,
         developerInstructions: '',
         personality: 'none',
